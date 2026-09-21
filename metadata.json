@@ -1,0 +1,5 @@
+{
+  "name": "Remix: VLSI AI Assistant",
+  "description": "AI-powered RTL code generation, verification, and visualization tool for VLSI students.",
+  "requestFramePermissions": []
+}
