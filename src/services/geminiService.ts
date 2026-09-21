@@ -356,7 +356,6 @@ export const verifyRtl = async (code: string) => {
 };
 
 export const generateDiagram = async (code: string) => {
-  const ai = getAiInstance();
   const modMatch = code.match(/module\s+([a-zA-Z0-9_]+)/);
   const modName = modMatch ? modMatch[1] : 'VLSI_Module';
   
@@ -369,59 +368,300 @@ export const generateDiagram = async (code: string) => {
   while ((m = inRegex.exec(code)) !== null) inputs.push(m[1]);
   while ((m = outRegex.exec(code)) !== null) outputs.push(m[1]);
   
-  if (inputs.length === 0) inputs.push('a', 'b', 'clk', 'rst_n');
-  if (outputs.length === 0) outputs.push('y', 'cout');
+  if (inputs.length === 0) inputs.push('a', 'b');
+  if (outputs.length === 0) outputs.push('y');
 
+  const uniqueInputs = Array.from(new Set(inputs));
+  const uniqueOutputs = Array.from(new Set(outputs));
+
+  const localDiagram = getLocalLogicDiagram(code, modName, uniqueInputs, uniqueOutputs);
+
+  const ai = getAiInstance();
   if (!ai) {
-    return {
-      moduleName: modName,
-      inputs: Array.from(new Set(inputs)),
-      outputs: Array.from(new Set(outputs)),
-      internalSignals: ['internal_net'],
-      submodules: [{ instanceName: 'u_core', moduleName: `${modName}_logic` }]
-    };
+    return localDiagram;
   }
+
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Analyze the following Verilog code and extract its structural information:
-      ${code}`,
+      contents: `Analyze the following Verilog code and extract its gate-level logic graph:
+      ${code}
+      
+      Return JSON with:
+      - moduleName: string
+      - nodes: array of { "id": string, "type": "input" | "output" | "and" | "or" | "not" | "nand" | "nor" | "xor" | "xnor" | "dff" | "mux", "label": string }
+      - edges: array of { "source": string, "target": string }`,
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             moduleName: { type: Type.STRING },
-            inputs: { type: Type.ARRAY, items: { type: Type.STRING } },
-            outputs: { type: Type.ARRAY, items: { type: Type.STRING } },
-            internalSignals: { type: Type.ARRAY, items: { type: Type.STRING } },
-            submodules: {
+            nodes: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  instanceName: { type: Type.STRING },
-                  moduleName: { type: Type.STRING }
+                  id: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  label: { type: Type.STRING }
                 },
-                required: ["instanceName", "moduleName"]
+                required: ["id", "type", "label"]
+              }
+            },
+            edges: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  source: { type: Type.STRING },
+                  target: { type: Type.STRING }
+                },
+                required: ["source", "target"]
               }
             }
           },
-          required: ["moduleName", "inputs", "outputs", "internalSignals", "submodules"]
+          required: ["moduleName", "nodes", "edges"]
         }
       }
     });
-    return JSON.parse(response.text || '{}');
+    const parsed = JSON.parse(response.text || '{}');
+    if (parsed.nodes && parsed.nodes.length > 0) {
+      return parsed;
+    }
+    return localDiagram;
   } catch (err) {
-    return {
-      moduleName: modName,
-      inputs: Array.from(new Set(inputs)),
-      outputs: Array.from(new Set(outputs)),
-      internalSignals: [],
-      submodules: []
-    };
+    return localDiagram;
   }
 };
+
+function getLocalLogicDiagram(code: string, modName: string, inputs: string[], outputs: string[]) {
+  const d = code.toLowerCase();
+  
+  if (d.includes('and_gate') || (d.includes('assign') && d.includes('&') && !d.includes('~'))) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_and', type: 'and', label: 'AND Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_and' },
+        { source: 'in_b', target: 'gate_and' },
+        { source: 'gate_and', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('or_gate') || (d.includes('assign') && d.includes('|') && !d.includes('~'))) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_or', type: 'or', label: 'OR Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_or' },
+        { source: 'in_b', target: 'gate_or' },
+        { source: 'gate_or', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('not_gate') || d.includes('inverter') || (d.includes('assign') && d.includes('~') && !d.includes('&') && !d.includes('|'))) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'gate_not', type: 'not', label: 'NOT Gate (INV)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_not' },
+        { source: 'gate_not', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('nand_gate') || d.includes('~(a & b)')) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_nand', type: 'nand', label: 'NAND Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_nand' },
+        { source: 'in_b', target: 'gate_nand' },
+        { source: 'gate_nand', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('nor_gate') || d.includes('~(a | b)')) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_nor', type: 'nor', label: 'NOR Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_nor' },
+        { source: 'in_b', target: 'gate_nor' },
+        { source: 'gate_nor', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('xor_gate') || (d.includes('^') && !d.includes('~('))) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_xor', type: 'xor', label: 'XOR Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_xor' },
+        { source: 'in_b', target: 'gate_xor' },
+        { source: 'gate_xor', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('xnor_gate') || d.includes('~(a ^ b)')) {
+    return {
+      moduleName: modName,
+      inputs,
+      outputs,
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A (Input)' },
+        { id: 'in_b', type: 'input', label: 'B (Input)' },
+        { id: 'gate_xnor', type: 'xnor', label: 'XNOR Gate (2-In)' },
+        { id: 'out_y', type: 'output', label: 'Y (Output)' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_xnor' },
+        { source: 'in_b', target: 'gate_xnor' },
+        { source: 'gate_xnor', target: 'out_y' }
+      ]
+    };
+  }
+
+  if (d.includes('full_adder') || d.includes('adder')) {
+    return {
+      moduleName: modName,
+      inputs: ['a', 'b', 'cin'],
+      outputs: ['sum', 'cout'],
+      nodes: [
+        { id: 'in_a', type: 'input', label: 'A' },
+        { id: 'in_b', type: 'input', label: 'B' },
+        { id: 'in_cin', type: 'input', label: 'Cin' },
+        { id: 'gate_xor1', type: 'xor', label: 'XOR1 (A ^ B)' },
+        { id: 'gate_xor2', type: 'xor', label: 'XOR2 (Sum)' },
+        { id: 'gate_and1', type: 'and', label: 'AND1 (A & B)' },
+        { id: 'gate_and2', type: 'and', label: 'AND2 (Cin & Int)' },
+        { id: 'gate_or', type: 'or', label: 'OR (Cout)' },
+        { id: 'out_sum', type: 'output', label: 'Sum' },
+        { id: 'out_cout', type: 'output', label: 'Cout' }
+      ],
+      edges: [
+        { source: 'in_a', target: 'gate_xor1' },
+        { source: 'in_b', target: 'gate_xor1' },
+        { source: 'gate_xor1', target: 'gate_xor2' },
+        { source: 'in_cin', target: 'gate_xor2' },
+        { source: 'gate_xor2', target: 'out_sum' },
+        { source: 'in_a', target: 'gate_and1' },
+        { source: 'in_b', target: 'gate_and1' },
+        { source: 'gate_xor1', target: 'gate_and2' },
+        { source: 'in_cin', target: 'gate_and2' },
+        { source: 'gate_and1', target: 'gate_or' },
+        { source: 'gate_and2', target: 'gate_or' },
+        { source: 'gate_or', target: 'out_cout' }
+      ]
+    };
+  }
+
+  if (d.includes('counter') || d.includes('dff') || d.includes('register')) {
+    return {
+      moduleName: modName,
+      inputs: ['clk', 'rst_n', 'enable'],
+      outputs: ['count'],
+      nodes: [
+        { id: 'in_clk', type: 'input', label: 'CLK' },
+        { id: 'in_rst', type: 'input', label: 'RST_N' },
+        { id: 'in_en', type: 'input', label: 'ENABLE' },
+        { id: 'gate_dff', type: 'dff', label: 'DFF Counter Reg' },
+        { id: 'out_count', type: 'output', label: 'Count[3:0]' }
+      ],
+      edges: [
+        { source: 'in_clk', target: 'gate_dff' },
+        { source: 'in_rst', target: 'gate_dff' },
+        { source: 'in_en', target: 'gate_dff' },
+        { source: 'gate_dff', target: 'out_count' }
+      ]
+    };
+  }
+
+  if (d.includes('mux') || d.includes('multiplexer')) {
+    return {
+      moduleName: modName,
+      inputs: ['in0', 'in1', 'sel'],
+      outputs: ['out'],
+      nodes: [
+        { id: 'in_0', type: 'input', label: 'IN0' },
+        { id: 'in_1', type: 'input', label: 'IN1' },
+        { id: 'in_sel', type: 'input', label: 'SEL' },
+        { id: 'gate_mux', type: 'mux', label: '2:1 MUX' },
+        { id: 'out_y', type: 'output', label: 'OUT' }
+      ],
+      edges: [
+        { source: 'in_0', target: 'gate_mux' },
+        { source: 'in_1', target: 'gate_mux' },
+        { source: 'in_sel', target: 'gate_mux' },
+        { source: 'gate_mux', target: 'out_y' }
+      ]
+    };
+  }
+
+  // Default generic circuit
+  const nodeInputs = inputs.map(name => ({ id: `in_${name}`, type: 'input', label: name }));
+  const nodeOutputs = outputs.map(name => ({ id: `out_${name}`, type: 'output', label: name }));
+  const mainGate = { id: 'gate_core', type: 'and', label: `${modName} Logic` };
+  
+  const defaultEdges: { source: string; target: string }[] = [];
+  nodeInputs.forEach(inNode => defaultEdges.push({ source: inNode.id, target: 'gate_core' }));
+  nodeOutputs.forEach(outNode => defaultEdges.push({ source: 'gate_core', target: outNode.id }));
+
+  return {
+    moduleName: modName,
+    inputs,
+    outputs,
+    nodes: [...nodeInputs, mainGate, ...nodeOutputs],
+    edges: defaultEdges
+  };
+}
 
 export const generateTruthTable = async (rtlCode: string) => {
   const d = rtlCode.toLowerCase();
@@ -877,14 +1117,145 @@ export const generatePowerPlanData = async (rtlCode: string): Promise<any> => {
 export const generateCmosDesignData = async (rtlCode: string): Promise<any> => {
   const d = rtlCode.toLowerCase();
 
-  if (d.includes('not_gate') || d.includes('inverter') || d === 'not') {
+  // 1. FULL ADDER (28T Static CMOS Mirror Full Adder & Dynamic CDL Full Adder)
+  if (d.includes('adder') || d.includes('full_adder') || (d.includes('sum') && d.includes('carry')) || d.includes('fa')) {
+    return {
+      cellName: 'CMOS_FULL_ADDER_28T',
+      description: 'Standard 28-Transistor Static Mirror CMOS Full Adder (Complementary Carry & Sum Stages with Output Inverters)',
+      topologyType: 'static_cmos',
+      availableTopologies: [
+        { id: 'static_28t', name: '28T Static Mirror CMOS (Image 2)', type: 'static_cmos' },
+        { id: 'dynamic_cdl', name: 'Dynamic Logic CDL Full Adder (Image 1)', type: 'dynamic_cdl' }
+      ],
+      inputs: ['a', 'b', 'c'],
+      outputs: [
+        { name: 'cout', label: 'Carry Out', formula: '(A & B) | (B & C) | (A & C)' },
+        { name: 'sum', label: 'Sum Out', formula: 'A ^ B ^ C' },
+        { name: 'cout_b', label: 'Carry Bar (~Cout)', formula: '~((A & B) | (C & (A | B)))' },
+        { name: 'sum_b', label: 'Sum Bar (~Sum)', formula: '~(A ^ B ^ C)' }
+      ],
+      sizingRecommendations: {
+        pmosWidth: '1.8 μm (PUN matching 3-transistor series worst case)',
+        nmosWidth: '0.8 μm (PDN 3-transistor stack sized for symmetric τHL)',
+        mobilityRatio: 'μn / μp ≈ 2.5 : 1',
+        tpLH: '22.4 ps (Cout), 28.6 ps (Sum)',
+        tpHL: '21.8 ps (Cout), 27.2 ps (Sum)'
+      },
+      punDescription: 'Carry PUN: Dual parallel-series PMOS branches generating ~Cout. Sum PUN: 3-branch complementary PMOS tree controlled by A, B, C and ~Cout.',
+      pdnDescription: 'Carry PDN: Series-parallel NMOS network pulling down ~Cout. Sum PDN: 3-branch NMOS evaluation tree pulling down ~Sum.',
+      transistors: [
+        // --- CARRY STAGE (12T) ---
+        // Carry PUN (PMOS)
+        { id: 'mp_c1', type: 'PMOS', name: 'MP_C1', gate: 'A', drain: 'P_C_INT1', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 70, y: 70, stage: 'carry' },
+        { id: 'mp_c2', type: 'PMOS', name: 'MP_C2', gate: 'B', drain: 'P_C_INT1', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 140, y: 70, stage: 'carry' },
+        { id: 'mp_c3', type: 'PMOS', name: 'MP_C3', gate: 'C', drain: 'COUT_B', source: 'P_C_INT1', bulk: 'VDD', width: 1.8, length: 45, x: 105, y: 135, stage: 'carry' },
+        { id: 'mp_c4', type: 'PMOS', name: 'MP_C4', gate: 'A', drain: 'P_C_INT2', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 220, y: 70, stage: 'carry' },
+        { id: 'mp_c5', type: 'PMOS', name: 'MP_C5', gate: 'B', drain: 'COUT_B', source: 'P_C_INT2', bulk: 'VDD', width: 1.8, length: 45, x: 220, y: 135, stage: 'carry' },
+
+        // Carry PDN (NMOS)
+        { id: 'mn_c1', type: 'NMOS', name: 'MN_C1', gate: 'A', drain: 'COUT_B', source: 'N_C_INT1', bulk: 'VSS', width: 0.8, length: 45, x: 70, y: 240, stage: 'carry' },
+        { id: 'mn_c2', type: 'NMOS', name: 'MN_C2', gate: 'B', drain: 'COUT_B', source: 'N_C_INT1', bulk: 'VSS', width: 0.8, length: 45, x: 140, y: 240, stage: 'carry' },
+        { id: 'mn_c3', type: 'NMOS', name: 'MN_C3', gate: 'C', drain: 'N_C_INT1', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 105, y: 305, stage: 'carry' },
+        { id: 'mn_c4', type: 'NMOS', name: 'MN_C4', gate: 'A', drain: 'COUT_B', source: 'N_C_INT2', bulk: 'VSS', width: 0.8, length: 45, x: 220, y: 240, stage: 'carry' },
+        { id: 'mn_c5', type: 'NMOS', name: 'MN_C5', gate: 'B', drain: 'N_C_INT2', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 220, y: 305, stage: 'carry' },
+
+        // Carry Inverter (2T: ~Cout -> Cout)
+        { id: 'mp_cinv', type: 'PMOS', name: 'MP_INV_C', gate: 'COUT_B', drain: 'COUT', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 300, y: 100, stage: 'carry_inv' },
+        { id: 'mn_cinv', type: 'NMOS', name: 'MN_INV_C', gate: 'COUT_B', drain: 'COUT', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 300, y: 270, stage: 'carry_inv' },
+
+        // --- SUM STAGE (16T) ---
+        // Sum PUN (PMOS)
+        { id: 'mp_s1', type: 'PMOS', name: 'MP_S1', gate: 'A', drain: 'P_S_INT1', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 380, y: 55, stage: 'sum' },
+        { id: 'mp_s2', type: 'PMOS', name: 'MP_S2', gate: 'B', drain: 'P_S_INT2', source: 'P_S_INT1', bulk: 'VDD', width: 1.8, length: 45, x: 380, y: 105, stage: 'sum' },
+        { id: 'mp_s3', type: 'PMOS', name: 'MP_S3', gate: 'C', drain: 'SUM_B', source: 'P_S_INT2', bulk: 'VDD', width: 1.8, length: 45, x: 380, y: 155, stage: 'sum' },
+
+        { id: 'mp_s4', type: 'PMOS', name: 'MP_S4', gate: 'A', drain: 'P_S_INT3', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 450, y: 55, stage: 'sum' },
+        { id: 'mp_s5', type: 'PMOS', name: 'MP_S5', gate: 'B', drain: 'P_S_INT3', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 510, y: 55, stage: 'sum' },
+        { id: 'mp_s6', type: 'PMOS', name: 'MP_S6', gate: 'C', drain: 'P_S_INT3', source: 'VDD', bulk: 'VDD', width: 1.8, length: 45, x: 570, y: 55, stage: 'sum' },
+        { id: 'mp_s7', type: 'PMOS', name: 'MP_S7', gate: 'COUT_B', drain: 'SUM_B', source: 'P_S_INT3', bulk: 'VDD', width: 1.8, length: 45, x: 510, y: 135, stage: 'sum' },
+
+        // Sum PDN (NMOS)
+        { id: 'mn_s1', type: 'NMOS', name: 'MN_S1', gate: 'A', drain: 'SUM_B', source: 'N_S_INT1', bulk: 'VSS', width: 0.8, length: 45, x: 380, y: 220, stage: 'sum' },
+        { id: 'mn_s2', type: 'NMOS', name: 'MN_S2', gate: 'B', drain: 'N_S_INT1', source: 'N_S_INT2', bulk: 'VSS', width: 0.8, length: 45, x: 380, y: 270, stage: 'sum' },
+        { id: 'mn_s3', type: 'NMOS', name: 'MN_S3', gate: 'C', drain: 'N_S_INT2', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 380, y: 320, stage: 'sum' },
+
+        { id: 'mn_s4', type: 'NMOS', name: 'MN_S4', gate: 'COUT_B', drain: 'SUM_B', source: 'N_S_INT3', bulk: 'VSS', width: 0.8, length: 45, x: 510, y: 240, stage: 'sum' },
+        { id: 'mn_s5', type: 'NMOS', name: 'MN_S5', gate: 'A', drain: 'N_S_INT3', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 450, y: 310, stage: 'sum' },
+        { id: 'mn_s6', type: 'NMOS', name: 'MN_S6', gate: 'B', drain: 'N_S_INT3', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 510, y: 310, stage: 'sum' },
+        { id: 'mn_s7', type: 'NMOS', name: 'MN_S7', gate: 'C', drain: 'N_S_INT3', source: 'VSS', bulk: 'VSS', width: 0.8, length: 45, x: 570, y: 310, stage: 'sum' },
+
+        // Sum Inverter (2T: ~Sum -> Sum)
+        { id: 'mp_sinv', type: 'PMOS', name: 'MP_INV_S', gate: 'SUM_B', drain: 'SUM', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 650, y: 100, stage: 'sum_inv' },
+        { id: 'mn_sinv', type: 'NMOS', name: 'MN_INV_S', gate: 'SUM_B', drain: 'SUM', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 650, y: 270, stage: 'sum_inv' }
+      ],
+      eulerPath: 'Carry: VDD → MP1..MP5 → ~Cout → MN1..MN5 → VSS | Sum: VDD → MP_S1..S7 → ~Sum → MN_S1..S7 → VSS (Optimal Shared Diffusion)',
+      spiceNetlist: `* ========================================================
+* 28-Transistor Static Mirror CMOS Full Adder (HSPICE)
+* Inputs: A, B, C (Cin) | Outputs: SUM, COUT
+* ========================================================
+.SUBCKT FULL_ADDER_28T A B C SUM COUT VDD VSS
+
+* --- Carry Generator (~Cout) ---
+* PUN
+M_CP1 P_C1 A VDD VDD PMOS W=1.8u L=45n
+M_CP2 P_C1 B VDD VDD PMOS W=1.8u L=45n
+M_CP3 COUT_B C P_C1 VDD PMOS W=1.8u L=45n
+M_CP4 P_C2 A VDD VDD PMOS W=1.8u L=45n
+M_CP5 COUT_B B P_C2 VDD PMOS W=1.8u L=45n
+
+* PDN
+M_CN1 COUT_B A N_C1 VSS NMOS W=0.8u L=45n
+M_CN2 COUT_B B N_C1 VSS NMOS W=0.8u L=45n
+M_CN3 N_C1 C VSS VSS NMOS W=0.8u L=45n
+M_CN4 COUT_B A N_C2 VSS NMOS W=0.8u L=45n
+M_CN5 N_C2 B VSS VSS NMOS W=0.8u L=45n
+
+* Carry Inverter
+M_CINV_P COUT COUT_B VDD VDD PMOS W=1.2u L=45n
+M_CINV_N COUT COUT_B VSS VSS NMOS W=0.6u L=45n
+
+* --- Sum Generator (~Sum) ---
+* PUN (Series ABC branch + Parallel branches with ~Cout)
+M_SP1 P_S1 A VDD VDD PMOS W=1.8u L=45n
+M_SP2 P_S2 B P_S1 VDD PMOS W=1.8u L=45n
+M_SP3 SUM_B C P_S2 VDD PMOS W=1.8u L=45n
+M_SP4 P_S3 A VDD VDD PMOS W=1.8u L=45n
+M_SP5 P_S3 B VDD VDD PMOS W=1.8u L=45n
+M_SP6 P_S3 C VDD VDD PMOS W=1.8u L=45n
+M_SP7 SUM_B COUT_B P_S3 VDD PMOS W=1.8u L=45n
+
+* PDN (Series ABC branch + Parallel branches with ~Cout)
+M_SN1 SUM_B A N_S1 VSS NMOS W=0.8u L=45n
+M_SN2 N_S1 B N_S2 VSS NMOS W=0.8u L=45n
+M_SN3 N_S2 C VSS VSS NMOS W=0.8u L=45n
+M_SN4 SUM_B COUT_B N_S3 VSS NMOS W=0.8u L=45n
+M_SN5 N_S3 A VSS VSS NMOS W=0.8u L=45n
+M_SN6 N_S3 B VSS VSS NMOS W=0.8u L=45n
+M_SN7 N_S3 C VSS VSS NMOS W=0.8u L=45n
+
+* Sum Inverter
+M_SINV_P SUM SUM_B VDD VDD PMOS W=1.2u L=45n
+M_SINV_N SUM SUM_B VSS VSS NMOS W=0.6u L=45n
+
+CL_SUM SUM VSS 15fF
+CL_COUT COUT VSS 15fF
+.ENDS FULL_ADDER_28T`
+    };
+  }
+
+  // 2. INVERTER / NOT GATE
+  if (d.includes('not_gate') || d.includes('inverter') || d === 'not' || (d.includes('assign') && d.includes('~') && !d.includes('&') && !d.includes('|') && !d.includes('^'))) {
     return {
       cellName: 'CMOS_INV_X1',
       description: 'Static Complementary CMOS Inverter (NOT Gate)',
-      punDescription: 'Single PMOS pulled up to VDD (active low conduct)',
-      pdnDescription: 'Single NMOS pulled down to VSS (active high conduct)',
+      inputs: ['a'],
+      outputs: [
+        { name: 'y', label: 'Output Y', formula: '~A' }
+      ],
+      punDescription: 'Single PMOS pulled up to VDD (conducts when A=0)',
+      pdnDescription: 'Single NMOS pulled down to VSS (conducts when A=1)',
       sizingRecommendations: {
-        pmosWidth: '1.2 μm (2x NMOS)',
+        pmosWidth: '1.2 μm (2x NMOS for balanced rise/fall time)',
         nmosWidth: '0.6 μm',
         mobilityRatio: 'μn / μp ≈ 2.5 : 1',
         tpLH: '8.4 ps',
@@ -904,10 +1275,97 @@ CL Y VSS 10fF
     };
   }
 
+  // 3. 2-INPUT AND GATE (NAND2 + INV = 6T)
+  if (d.includes('and_gate') || (d.includes('&') && !d.includes('~') && !d.includes('|') && !d.includes('^'))) {
+    return {
+      cellName: 'CMOS_AND2_X1',
+      description: '6-Transistor CMOS AND Gate (2-Input NAND followed by Inverter Buffer)',
+      inputs: ['a', 'b'],
+      outputs: [
+        { name: 'y', label: 'AND Output Y', formula: 'A & B' },
+        { name: 'nand_out', label: 'Internal NAND Node', formula: '~(A & B)' }
+      ],
+      punDescription: 'NAND Stage: Parallel PMOS (MP1 || MP2). Buffer: Single PMOS MP3.',
+      pdnDescription: 'NAND Stage: Series NMOS (MN1 - MN2). Buffer: Single NMOS MN3.',
+      sizingRecommendations: {
+        pmosWidth: '1.2 μm',
+        nmosWidth: '0.6 μm',
+        mobilityRatio: 'μn / μp ≈ 2.5 : 1',
+        tpLH: '16.4 ps',
+        tpHL: '15.8 ps'
+      },
+      transistors: [
+        { id: 'm1', type: 'PMOS', name: 'MP1', gate: 'A', drain: 'NAND_OUT', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 100, y: 70 },
+        { id: 'm2', type: 'PMOS', name: 'MP2', gate: 'B', drain: 'NAND_OUT', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 200, y: 70 },
+        { id: 'm3', type: 'NMOS', name: 'MN1', gate: 'A', drain: 'NAND_OUT', source: 'N_INT', bulk: 'VSS', width: 0.6, length: 45, x: 150, y: 210 },
+        { id: 'm4', type: 'NMOS', name: 'MN2', gate: 'B', drain: 'N_INT', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 150, y: 290 },
+        { id: 'm5', type: 'PMOS', name: 'MP3 (INV)', gate: 'NAND_OUT', drain: 'Y', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 310, y: 70 },
+        { id: 'm6', type: 'NMOS', name: 'MN3 (INV)', gate: 'NAND_OUT', drain: 'Y', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 310, y: 250 }
+      ],
+      eulerPath: 'VDD → MP1/MP2 → NAND_OUT → MN1 → MN2 → VSS | Buffer: VDD → MP3 → Y → MN3 → VSS',
+      spiceNetlist: `* SPICE Netlist for 6T CMOS AND Gate
+.SUBCKT AND2_X1 A B Y VDD VSS
+M1 NAND_OUT A VDD VDD PMOS W=1.2u L=45n
+M2 NAND_OUT B VDD VDD PMOS W=1.2u L=45n
+M3 NAND_OUT A N_INT VSS NMOS W=0.6u L=45n
+M4 N_INT B VSS VSS NMOS W=0.6u L=45n
+M5 Y NAND_OUT VDD VDD PMOS W=1.2u L=45n
+M6 Y NAND_OUT VSS VSS NMOS W=0.6u L=45n
+CL Y VSS 15fF
+.ENDS AND2_X1`
+    };
+  }
+
+  // 4. 2-INPUT OR GATE (NOR2 + INV = 6T)
+  if (d.includes('or_gate') || (d.includes('|') && !d.includes('~') && !d.includes('&') && !d.includes('^'))) {
+    return {
+      cellName: 'CMOS_OR2_X1',
+      description: '6-Transistor CMOS OR Gate (2-Input NOR followed by Inverter Buffer)',
+      inputs: ['a', 'b'],
+      outputs: [
+        { name: 'y', label: 'OR Output Y', formula: 'A | B' },
+        { name: 'nor_out', label: 'Internal NOR Node', formula: '~(A | B)' }
+      ],
+      punDescription: 'NOR Stage: Series PMOS (MP1 - MP2). Buffer: Single PMOS MP3.',
+      pdnDescription: 'NOR Stage: Parallel NMOS (MN1 || MN2). Buffer: Single NMOS MN3.',
+      sizingRecommendations: {
+        pmosWidth: '2.4 μm (Series PMOS requires double width)',
+        nmosWidth: '0.6 μm',
+        mobilityRatio: 'μn / μp ≈ 2.5 : 1',
+        tpLH: '18.2 ps',
+        tpHL: '16.1 ps'
+      },
+      transistors: [
+        { id: 'm1', type: 'PMOS', name: 'MP1', gate: 'A', drain: 'P_INT', source: 'VDD', bulk: 'VDD', width: 2.4, length: 45, x: 150, y: 55 },
+        { id: 'm2', type: 'PMOS', name: 'MP2', gate: 'B', drain: 'NOR_OUT', source: 'P_INT', bulk: 'VDD', width: 2.4, length: 45, x: 150, y: 125 },
+        { id: 'm3', type: 'NMOS', name: 'MN1', gate: 'A', drain: 'NOR_OUT', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 100, y: 240 },
+        { id: 'm4', type: 'NMOS', name: 'MN2', gate: 'B', drain: 'NOR_OUT', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 200, y: 240 },
+        { id: 'm5', type: 'PMOS', name: 'MP3 (INV)', gate: 'NOR_OUT', drain: 'Y', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 310, y: 70 },
+        { id: 'm6', type: 'NMOS', name: 'MN3 (INV)', gate: 'NOR_OUT', drain: 'Y', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 310, y: 250 }
+      ],
+      eulerPath: 'VDD → MP1 → MP2 → NOR_OUT → MN1/MN2 (Parallel) → VSS | Buffer: VDD → MP3 → Y → MN3 → VSS',
+      spiceNetlist: `* SPICE Netlist for 6T CMOS OR Gate
+.SUBCKT OR2_X1 A B Y VDD VSS
+M1 P_INT A VDD VDD PMOS W=2.4u L=45n
+M2 NOR_OUT B P_INT VDD PMOS W=2.4u L=45n
+M3 NOR_OUT A VSS VSS NMOS W=0.6u L=45n
+M4 NOR_OUT B VSS VSS NMOS W=0.6u L=45n
+M5 Y NOR_OUT VDD VDD PMOS W=1.2u L=45n
+M6 Y NOR_OUT VSS VSS NMOS W=0.6u L=45n
+CL Y VSS 15fF
+.ENDS OR2_X1`
+    };
+  }
+
+  // 5. 2-INPUT NOR GATE (4T)
   if (d.includes('nor_gate') || d.includes('nor')) {
     return {
       cellName: 'CMOS_NOR2_X1',
       description: '2-Input Complementary CMOS NOR Gate Standard Cell',
+      inputs: ['a', 'b'],
+      outputs: [
+        { name: 'y', label: 'NOR Output Y', formula: '~(A | B)' }
+      ],
       punDescription: 'Series PMOS transistors (M1 - M2) pulled up to VDD',
       pdnDescription: 'Parallel NMOS transistors (M3 || M4) pulled down to VSS',
       sizingRecommendations: {
@@ -935,10 +1393,52 @@ CL Y VSS 15fF
     };
   }
 
-  // Default / NAND2
+  // 6. 2-INPUT XOR GATE (8T / 10T Transmission Gate Topology)
+  if (d.includes('xor_gate') || (d.includes('^') && !d.includes('~'))) {
+    return {
+      cellName: 'CMOS_XOR2_X1',
+      description: 'Complementary Transmission-Gate CMOS XOR Gate (8T)',
+      inputs: ['a', 'b'],
+      outputs: [
+        { name: 'y', label: 'XOR Output Y', formula: 'A ^ B' }
+      ],
+      punDescription: 'Transmission Gate PMOS passing B when A=0 and ~B when A=1',
+      pdnDescription: 'Transmission Gate NMOS passing B when A=0 and ~B when A=1',
+      sizingRecommendations: {
+        pmosWidth: '1.4 μm',
+        nmosWidth: '0.7 μm',
+        mobilityRatio: 'μn / μp ≈ 2.5 : 1',
+        tpLH: '17.1 ps',
+        tpHL: '16.8 ps'
+      },
+      transistors: [
+        { id: 'm1', type: 'PMOS', name: 'MP_INVA', gate: 'A', drain: 'A_B', source: 'VDD', bulk: 'VDD', width: 1.2, length: 45, x: 80, y: 70 },
+        { id: 'm2', type: 'NMOS', name: 'MN_INVA', gate: 'A', drain: 'A_B', source: 'VSS', bulk: 'VSS', width: 0.6, length: 45, x: 80, y: 260 },
+        { id: 'm3', type: 'PMOS', name: 'MP_TG1', gate: 'A', drain: 'Y', source: 'B', bulk: 'VDD', width: 1.4, length: 45, x: 200, y: 65 },
+        { id: 'm4', type: 'NMOS', name: 'MN_TG1', gate: 'A_B', drain: 'Y', source: 'B', bulk: 'VSS', width: 0.7, length: 45, x: 200, y: 145 },
+        { id: 'm5', type: 'PMOS', name: 'MP_TG2', gate: 'A_B', drain: 'Y', source: 'B_B', bulk: 'VDD', width: 1.4, length: 45, x: 310, y: 65 },
+        { id: 'm6', type: 'NMOS', name: 'MN_TG2', gate: 'A', drain: 'Y', source: 'B_B', bulk: 'VSS', width: 0.7, length: 45, x: 310, y: 145 }
+      ],
+      eulerPath: 'Inverter A + Inverter B + Parallel Dual Transmission Gates to Output Y',
+      spiceNetlist: `* SPICE Netlist for 8T Transmission-Gate XOR
+.SUBCKT XOR2_X1 A B Y VDD VSS
+M1 A_B A VDD VDD PMOS W=1.2u L=45n
+M2 A_B A VSS VSS NMOS W=0.6u L=45n
+M3 Y A B VDD PMOS W=1.4u L=45n
+M4 Y A_B B VSS NMOS W=0.7u L=45n
+CL Y VSS 15fF
+.ENDS XOR2_X1`
+    };
+  }
+
+  // 7. DEFAULT / NAND2
   return {
     cellName: 'CMOS_NAND2_X1',
     description: '2-Input Complementary CMOS NAND Standard Cell',
+    inputs: ['a', 'b'],
+    outputs: [
+      { name: 'y', label: 'NAND Output Y', formula: '~(A & B)' }
+    ],
     punDescription: 'Parallel PMOS transistors (M1 || M2) pulled up to VDD',
     pdnDescription: 'Series NMOS transistors (M3 - M4) pulled down to VSS',
     sizingRecommendations: {
@@ -971,9 +1471,977 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
   const modMatch = rtlCode.match(/module\s+([a-zA-Z0-9_]+)/);
   const modName = modMatch ? modMatch[1] : 'digital_circuit';
 
+  // 1. INVERTER / NOT GATE
+  if (d.includes('not_gate') || d.includes('inverter') || (d.includes('assign') && d.includes('~') && !d.includes('&') && !d.includes('|') && !d.includes('^'))) {
+    return {
+      chipName: '1-Bit CMOS Inverter (INV_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: 'Inverter (NOT Gate)',
+      booleanFormula: 'Y = ~A',
+      metrics: {
+        totalHeight: '6.8 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '1.8 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'P-Silicon Substrate & N-Well',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'P-Substrate / N-Well Tap (<100> Si)', componentId: 'SUB_01', specs: { role: 'Bulk substrate & well isolation', material: 'Single-Crystal Silicon', doping: 'Boron P-Type / Phosphorous N-Well', sheetRes: '10 Ω·cm', thickness: '400 μm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: PMOS & NMOS 3D FinFET Channels',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 50, y: 60, w: 280, h: 24, label: 'PMOS Pull-Up Fin MP1 (W=1.2μm)', componentId: 'MP1_FIN', specs: { role: 'Pulls Output Y to VDD when Input A=0', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: 'μp = 140 cm²/V·s', ion: '1.4 mA/μm', ioff: '2.1 nA/μm' } },
+            { type: 'fin', x: 50, y: 170, w: 280, h: 24, label: 'NMOS Pull-Down Fin MN1 (W=0.6μm)', componentId: 'MN1_FIN', specs: { role: 'Pulls Output Y to VSS when Input A=1', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: 'μn = 350 cm²/V·s', ion: '1.9 mA/μm', ioff: '1.8 nA/μm' } },
+            { type: 'gate', x: 160, y: 35, w: 32, h: 185, label: 'Common Gate A (High-K Metal Gate)', componentId: 'GATE_A', specs: { role: 'Controls both MP1 and MN1 simultaneously', type: 'High-K Metal Gate', dielectric: 'HfO2 (EOT 0.75nm)', workFunction: '4.65 eV (TiN/TiAl)', gateCap: '0.85 fF', signal: 'Input A' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Power Rails & Output Net Y',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 40, w: 320, h: 20, label: 'VDD Power Rail (M1 Cobalt)', componentId: 'M1_VDD', specs: { role: 'High-potential power delivery', voltage: '0.85 V', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } },
+            { type: 'wire', x: 150, y: 80, w: 50, h: 95, label: 'Output Net Y Node (Co Liner)', componentId: 'M1_NET_Y', specs: { role: 'Inverted signal output node', net: 'Y', parasiticC: '1.2 fF', delay: '2.1 ps' } },
+            { type: 'wire', x: 30, y: 205, w: 320, h: 20, label: 'VSS Ground Rail (M1 Cobalt)', componentId: 'M1_VSS', specs: { role: 'Low-potential reference return', voltage: '0.0 V (GND)', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Input Pin A',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 90, y: 25, w: 26, h: 210, label: 'Input Pin A (M2 Cu)', componentId: 'M2_PIN_A', specs: { role: 'External input connection track', net: 'A', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '0.8 ps' } },
+            { type: 'wire', x: 260, y: 25, w: 26, h: 210, label: 'Output Pin Y (M2 Cu)', componentId: 'M2_PIN_Y', specs: { role: 'External output drive track', net: 'Y', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '0.9 ps' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power TSV Bumps',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 65, y: 55, w: 65, h: 65, label: '3D TSV VDD Bump', componentId: 'TSV_VDD', specs: { role: '3D vertical power bond pad', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } },
+            { type: 'pad', x: 235, y: 55, w: 65, h: 65, label: '3D TSV VSS Bump', componentId: 'TSV_VSS', specs: { role: '3D vertical ground bond pad', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 2. 2-INPUT AND GATE (NAND2 + INV)
+  if (d.includes('and_gate') || (d.includes('&') && !d.includes('~') && !d.includes('|') && !d.includes('^'))) {
+    return {
+      chipName: '2-Input AND Gate (AND2_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '2-Input AND Gate (NAND2 + Inverter Buffer)',
+      booleanFormula: 'Y = A & B',
+      metrics: {
+        totalHeight: '7.6 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '2.8 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & P-Well/N-Well',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Dual-Well Silicon Base (<100>)', componentId: 'SUB_AND', specs: { role: 'Substrate foundation for 6-transistor cell', material: 'Single-Crystal Silicon', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: NAND2 Stage + Inverter Buffer Fins',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 55, w: 180, h: 22, label: 'PMOS Parallel Pull-Up (MP1/MP2)', componentId: 'FIN_P_NAND', specs: { role: 'Pulls internal net NAND_OUT to VDD if A=0 or B=0', width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 165, w: 180, h: 22, label: 'NMOS Series Pull-Down (MN1+MN2)', componentId: 'FIN_N_NAND', specs: { role: 'Conducts only when both A=1 and B=1 to pull to GND', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 240, y: 55, w: 90, h: 22, label: 'Buffer PMOS (MP3)', componentId: 'FIN_P_INV', specs: { role: 'Inverts NAND_OUT to produce true AND output Y', width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 240, y: 165, w: 90, h: 22, label: 'Buffer NMOS (MN3)', componentId: 'FIN_N_INV', specs: { role: 'Inverts NAND_OUT to produce true AND output Y', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 80, y: 35, w: 22, h: 175, label: 'HKMG Gate A', componentId: 'GATE_A', specs: { role: 'Input A transistor control', signal: 'Input A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 150, y: 35, w: 22, h: 175, label: 'HKMG Gate B', componentId: 'GATE_B', specs: { role: 'Input B transistor control', signal: 'Input B', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 270, y: 35, w: 22, h: 175, label: 'Buffer Inverter Gate', componentId: 'GATE_INV', specs: { role: 'Driven by internal NAND_OUT net', signal: 'NAND_OUT', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Internal NAND to INV Coupling Net',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1)', componentId: 'M1_VDD', specs: { voltage: '0.85 V', sheetRes: '0.45 Ω/sq' } },
+            { type: 'wire', x: 160, y: 80, w: 100, h: 35, label: 'Internal Net NAND_OUT (Co)', componentId: 'M1_NET_NAND', specs: { role: 'Transfers ~(A&B) to Inverter Buffer', net: 'NAND_OUT', parasiticC: '1.8 fF', delay: '1.4 ps' } },
+            { type: 'wire', x: 260, y: 120, w: 50, h: 60, label: 'Final Output Net Y (Co)', componentId: 'M1_NET_Y', specs: { role: 'True AND output', net: 'Y', parasiticC: '1.2 fF' } },
+            { type: 'wire', x: 30, y: 205, w: 320, h: 18, label: 'VSS Ground Rail (M1)', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)', sheetRes: '0.45 Ω/sq' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Inputs A, B & Output Y',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 75, y: 25, w: 22, h: 210, label: 'Input A Net (M2)', componentId: 'M2_A', specs: { net: 'A', width: '28 nm', sheetRes: '0.22 Ω/sq' } },
+            { type: 'wire', x: 145, y: 25, w: 22, h: 210, label: 'Input B Net (M2)', componentId: 'M2_B', specs: { net: 'B', width: '28 nm', sheetRes: '0.22 Ω/sq' } },
+            { type: 'wire', x: 275, y: 25, w: 22, h: 210, label: 'Output Y Net (M2)', componentId: 'M2_Y', specs: { net: 'Y (A & B)', width: '28 nm', sheetRes: '0.22 Ω/sq' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power Mesh & TSVs',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'wire', x: 20, y: 155, w: 340, h: 42, label: 'Global Ultra-Thick Power Strap (M7)', componentId: 'M7_STRAP', specs: { thickness: '1.2 μm', currentMax: '65 mA' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 3. 2-INPUT OR GATE (NOR2 + INV)
+  if (d.includes('or_gate') || (d.includes('|') && !d.includes('~') && !d.includes('&') && !d.includes('^'))) {
+    return {
+      chipName: '2-Input OR Gate (OR2_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '2-Input OR Gate (NOR2 + Inverter Buffer)',
+      booleanFormula: 'Y = A | B',
+      metrics: {
+        totalHeight: '7.6 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '3.1 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & P-Well/N-Well',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Dual-Well Silicon Base (<100>)', componentId: 'SUB_OR', specs: { role: 'Substrate foundation for OR2 cell', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: Series PMOS (NOR) & Parallel NMOS Fins',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 55, w: 180, h: 22, label: 'PMOS Series Pull-Up (MP1+MP2)', componentId: 'FIN_P_NOR', specs: { role: 'Conducts only when both A=0 and B=0', width: '2.4 μm (Sized for stack)', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 165, w: 180, h: 22, label: 'NMOS Parallel Pull-Down (MN1||MN2)', componentId: 'FIN_N_NOR', specs: { role: 'Pulls NOR_OUT to GND if A=1 or B=1', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 240, y: 55, w: 90, h: 22, label: 'Inverter PMOS (MP3)', componentId: 'FIN_P_INV', specs: { role: 'Inverts NOR_OUT to produce true OR output Y', width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 240, y: 165, w: 90, h: 22, label: 'Inverter NMOS (MN3)', componentId: 'FIN_N_INV', specs: { role: 'Inverts NOR_OUT to produce true OR output Y', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 80, y: 35, w: 22, h: 175, label: 'HKMG Gate A', componentId: 'GATE_A', specs: { role: 'Input A control', signal: 'Input A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 150, y: 35, w: 22, h: 175, label: 'HKMG Gate B', componentId: 'GATE_B', specs: { role: 'Input B control', signal: 'Input B', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 270, y: 35, w: 22, h: 175, label: 'Buffer Inverter Gate', componentId: 'GATE_INV', specs: { role: 'Driven by internal NOR_OUT net', signal: 'NOR_OUT' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Internal NOR to INV Coupling Net',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1)', componentId: 'M1_VDD', specs: { voltage: '0.85 V', sheetRes: '0.45 Ω/sq' } },
+            { type: 'wire', x: 160, y: 80, w: 100, h: 35, label: 'Internal Net NOR_OUT (Co)', componentId: 'M1_NET_NOR', specs: { role: 'Transfers ~(A|B) to Inverter Buffer', net: 'NOR_OUT', parasiticC: '1.9 fF' } },
+            { type: 'wire', x: 260, y: 120, w: 50, h: 60, label: 'Final Output Net Y (Co)', componentId: 'M1_NET_Y', specs: { role: 'True OR output Y', net: 'Y', parasiticC: '1.2 fF' } },
+            { type: 'wire', x: 30, y: 205, w: 320, h: 18, label: 'VSS Ground Rail (M1)', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)', sheetRes: '0.45 Ω/sq' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Inputs A, B & Output Y',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 75, y: 25, w: 22, h: 210, label: 'Input A Net (M2)', componentId: 'M2_A', specs: { net: 'A', width: '28 nm', sheetRes: '0.22 Ω/sq' } },
+            { type: 'wire', x: 145, y: 25, w: 22, h: 210, label: 'Input B Net (M2)', componentId: 'M2_B', specs: { net: 'B', width: '28 nm', sheetRes: '0.22 Ω/sq' } },
+            { type: 'wire', x: 275, y: 25, w: 22, h: 210, label: 'Output Y Net (M2)', componentId: 'M2_Y', specs: { net: 'Y (A | B)', width: '28 nm', sheetRes: '0.22 Ω/sq' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power Mesh & TSVs',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'wire', x: 20, y: 155, w: 340, h: 42, label: 'Global Ultra-Thick Power Strap (M7)', componentId: 'M7_STRAP', specs: { thickness: '1.2 μm', currentMax: '65 mA' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 4. 2-INPUT NOR GATE
+  if (d.includes('nor_gate') || d.includes('~(a | b)')) {
+    return {
+      chipName: '2-Input NOR Gate (NOR2_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '2-Input Complementary CMOS NOR Gate',
+      booleanFormula: 'Y = ~(A | B)',
+      metrics: {
+        totalHeight: '7.2 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '2.5 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & P-Well/N-Well',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Bulk P-Silicon Wafer (<100>)', componentId: 'SUB_NOR', specs: { material: 'Bulk Silicon', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: Series PMOS (PUN) & Parallel NMOS (PDN)',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 50, y: 60, w: 260, h: 24, label: 'PMOS Series Stack (MP1 + MP2)', componentId: 'FIN_P_SERIES', specs: { role: 'Pull-up to VDD only when A=0 and B=0', width: '2.4 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 50, y: 170, w: 260, h: 24, label: 'NMOS Parallel Network (MN1 || MN2)', componentId: 'FIN_N_PARALLEL', specs: { role: 'Pull-down to GND if A=1 or B=1', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 110, y: 35, w: 24, h: 180, label: 'HKMG Gate A', componentId: 'GATE_A', specs: { signal: 'Input A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 210, y: 35, w: 24, h: 180, label: 'HKMG Gate B', componentId: 'GATE_B', specs: { signal: 'Input B', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Local Power & Output Rail Y',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 140, y: 75, w: 55, h: 90, label: 'Output Net Y Node (Co)', componentId: 'M1_NET_Y', specs: { net: 'Y', delay: '2.5 ps' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Routing A, B, Y',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 80, y: 25, w: 22, h: 210, label: 'Input A Net (M2)', componentId: 'M2_A', specs: { net: 'A', width: '28 nm' } },
+            { type: 'wire', x: 180, y: 25, w: 22, h: 210, label: 'Input B Net (M2)', componentId: 'M2_B', specs: { net: 'B', width: '28 nm' } },
+            { type: 'wire', x: 270, y: 25, w: 22, h: 210, label: 'Output Y Net (M2)', componentId: 'M2_Y', specs: { net: 'Y (~(A | B))', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global VDD/VSS TSV Bumps',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 70, h: 70, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 70, h: 70, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 5. 2-INPUT XOR GATE
+  if (d.includes('xor_gate') || (d.includes('^') && !d.includes('~('))) {
+    return {
+      chipName: '2-Input XOR Gate (XOR2_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '2-Input Complementary XOR Transmission Gate',
+      booleanFormula: 'Y = A ^ B',
+      metrics: {
+        totalHeight: '8.0 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '3.6 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & Dual-Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Dual-Well Isolated Base (<100>)', componentId: 'SUB_XOR', specs: { role: 'Substrate isolation for 8T transmission cell', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 8-Fin Complementary Transmission Network',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 50, w: 290, h: 20, label: 'PMOS Pass-Gate Array (MP1..MP4)', componentId: 'FIN_P_XOR', specs: { role: 'Transmits complementary inputs on clock/gate phase', width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 165, w: 290, h: 20, label: 'NMOS Pass-Gate Array (MN1..MN4)', componentId: 'FIN_N_XOR', specs: { role: 'Passes true inputs when gate enables', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 70, y: 35, w: 20, h: 175, label: 'Gate A', componentId: 'GATE_A', specs: { signal: 'Input A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 140, y: 35, w: 20, h: 175, label: 'Gate ~A (Inv A)', componentId: 'GATE_AN', specs: { signal: 'Inverted Input ~A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 210, y: 35, w: 20, h: 175, label: 'Gate B', componentId: 'GATE_B', specs: { signal: 'Input B', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 280, y: 35, w: 20, h: 175, label: 'Gate ~B (Inv B)', componentId: 'GATE_BN', specs: { signal: 'Inverted Input ~B', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Local Cross-Coupled Nets',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Power Rail', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 100, y: 70, w: 60, h: 80, label: 'Intermediate XOR Node 1', componentId: 'M1_NODE1', specs: { role: 'Cross-couple net', net: 'N1' } },
+            { type: 'wire', x: 200, y: 70, w: 60, h: 80, label: 'Intermediate XOR Node 2', componentId: 'M1_NODE2', specs: { role: 'Cross-couple net', net: 'N2' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Routing A, ~A, B, ~B, Y',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 65, y: 25, w: 18, h: 210, label: 'Input A Line', componentId: 'M2_A', specs: { net: 'A', width: '28 nm' } },
+            { type: 'wire', x: 135, y: 25, w: 18, h: 210, label: 'Input ~A Line', componentId: 'M2_AN', specs: { net: '~A', width: '28 nm' } },
+            { type: 'wire', x: 205, y: 25, w: 18, h: 210, label: 'Input B Line', componentId: 'M2_B', specs: { net: 'B', width: '28 nm' } },
+            { type: 'wire', x: 275, y: 25, w: 18, h: 210, label: 'Output Y Line', componentId: 'M2_Y', specs: { net: 'Y (A ^ B)', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power Mesh & TSVs',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 6. 2-INPUT XNOR GATE
+  if (d.includes('xnor_gate') || d.includes('~(a ^ b)')) {
+    return {
+      chipName: '2-Input XNOR Gate (XNOR2_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '2-Input Complementary XNOR Gate',
+      booleanFormula: 'Y = ~(A ^ B)',
+      metrics: {
+        totalHeight: '8.0 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '3.7 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & Dual-Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Dual-Well Isolated Base (<100>)', componentId: 'SUB_XNOR', specs: { role: 'Substrate isolation for XNOR cell', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 8-Fin XNOR Complementary Network',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 50, w: 290, h: 20, label: 'PMOS Pass-Gate Array', componentId: 'FIN_P_XNOR', specs: { role: 'Transmits XNOR equivalence states', width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 165, w: 290, h: 20, label: 'NMOS Pass-Gate Array', componentId: 'FIN_N_XNOR', specs: { role: 'Conducts ground paths for non-equivalence', width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 70, y: 35, w: 20, h: 175, label: 'Gate A', componentId: 'GATE_A', specs: { signal: 'Input A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 140, y: 35, w: 20, h: 175, label: 'Gate ~A', componentId: 'GATE_AN', specs: { signal: 'Inverted Input ~A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 210, y: 35, w: 20, h: 175, label: 'Gate B', componentId: 'GATE_B', specs: { signal: 'Input B', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 280, y: 35, w: 20, h: 175, label: 'Gate ~B', componentId: 'GATE_BN', specs: { signal: 'Inverted Input ~B', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Local XNOR Equivalence Output',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Power Rail', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 150, y: 80, w: 60, h: 80, label: 'XNOR True Output Net Y', componentId: 'M1_NET_Y', specs: { role: 'Equivalence output (A == B)', net: 'Y', delay: '3.7 ps' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Routing Lines',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 70, y: 25, w: 18, h: 210, label: 'Input A Line', componentId: 'M2_A', specs: { net: 'A', width: '28 nm' } },
+            { type: 'wire', x: 140, y: 25, w: 18, h: 210, label: 'Input B Line', componentId: 'M2_B', specs: { net: 'B', width: '28 nm' } },
+            { type: 'wire', x: 260, y: 25, w: 18, h: 210, label: 'Output Y Line', componentId: 'M2_Y', specs: { net: 'Y (~(A ^ B))', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power Mesh & TSVs',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 7. FULL ADDER / ARITHMETIC CIRCUITS
+  if (d.includes('adder') || d.includes('sum') || d.includes('carry')) {
+    return {
+      chipName: '4-Bit Ripple Carry Full Adder 3D Silicon & BEOL Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '4-Bit Ripple Carry Full Adder Macro',
+      booleanFormula: '{Cout, Sum[3:0]} = A[3:0] + B[3:0] + Cin',
+      metrics: {
+        totalHeight: '8.8 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '4.8 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & Triple-Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Triple-Well Isolated Silicon Base', componentId: 'SUB_ADDER', specs: { material: 'Single-Crystal Silicon', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 14-Fin XOR & Majority Logic Array',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 50, w: 300, h: 18, label: 'PMOS Fin Network (Sum XOR)', componentId: 'FIN_SUM_P', specs: { role: '3-input XOR pull-up network', finCount: 4, width: '1.2 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 105, w: 300, h: 18, label: 'NMOS Fin Network (Sum XOR)', componentId: 'FIN_SUM_N', specs: { role: '3-input XOR pull-down network', finCount: 4, width: '0.6 μm', channelLength: '12 nm' } },
+            { type: 'fin', x: 40, y: 165, w: 300, h: 18, label: 'Cout Majority Carry Fins', componentId: 'FIN_COUT', specs: { role: 'Generates carry-out majority condition', finCount: 6, width: '1.0 μm', channelLength: '12 nm' } },
+            { type: 'gate', x: 90, y: 35, w: 20, h: 165, label: 'Gate A[3:0]', componentId: 'GATE_A', specs: { signal: 'Input Vector A', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 170, y: 35, w: 20, h: 165, label: 'Gate B[3:0]', componentId: 'GATE_B', specs: { signal: 'Input Vector B', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 250, y: 35, w: 20, h: 165, label: 'Gate Cin', componentId: 'GATE_CIN', specs: { signal: 'Carry Input Cin', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Local Intra-Cell Interconnects',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Rail (0.85V)', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 80, y: 70, w: 45, h: 80, label: 'XOR Propagate Net (P)', componentId: 'M1_NET_INT', specs: { net: 'A ^ B', delay: '2.8 ps' } },
+            { type: 'wire', x: 180, y: 70, w: 50, h: 80, label: 'Sum Out Bus Node', componentId: 'M1_NET_SUM', specs: { net: 'Sum[3:0]', delay: '4.8 ps' } },
+            { type: 'wire', x: 260, y: 70, w: 45, h: 80, label: 'Cout Ripple Node', componentId: 'M1_NET_COUT', specs: { net: 'Cout', delay: '3.9 ps' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Routing A, B, Cin, Sum, Cout',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 50, y: 25, w: 18, h: 210, label: 'Input A Bus Track', componentId: 'M2_A', specs: { net: 'A[3:0]', width: '28 nm' } },
+            { type: 'wire', x: 110, y: 25, w: 18, h: 210, label: 'Input B Bus Track', componentId: 'M2_B', specs: { net: 'B[3:0]', width: '28 nm' } },
+            { type: 'wire', x: 170, y: 25, w: 18, h: 210, label: 'Cin Carry Line', componentId: 'M2_CIN', specs: { net: 'Cin', width: '28 nm' } },
+            { type: 'wire', x: 230, y: 25, w: 18, h: 210, label: 'Sum[3:0] Result Bus', componentId: 'M2_SUM', specs: { net: 'Sum[3:0]', width: '28 nm' } },
+            { type: 'wire', x: 290, y: 25, w: 18, h: 210, label: 'Cout Ripple Carry Line', componentId: 'M2_COUT', specs: { net: 'Cout', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: 3D TSV Microbumps (VDD/VSS/IO)',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 50, y: 55, w: 60, h: 60, label: '3D TSV VDD Bump', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '7.2 fF' } },
+            { type: 'pad', x: 160, y: 55, w: 60, h: 60, label: '3D TSV Sum Bus Bump', componentId: 'TSV_SUM', specs: { diameter: '1.2 μm', cap: '6.8 fF' } },
+            { type: 'pad', x: 270, y: 55, w: 60, h: 60, label: '3D TSV Cout Bump', componentId: 'TSV_COUT', specs: { diameter: '1.2 μm', cap: '6.8 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 8. SYNCHRONOUS COUNTER / SEQUENTIAL CIRCUITS
+  if (d.includes('counter') || d.includes('up_down') || d.includes('dff')) {
+    return {
+      chipName: '4-Bit Synchronous Up/Down Counter 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '4-Bit Synchronous Sequential Counter Macro',
+      booleanFormula: 'count <= up_down ? count + 1 : count - 1 (on posedge clk)',
+      metrics: {
+        totalHeight: '9.2 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '5.2 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & Guard-Ring Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Deep N-Well Guard-Ring Base', componentId: 'SUB_CNT', specs: { role: 'Substrate noise isolation for clock flip-flops', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 4x Master-Slave DFF Register Array + ALU Fins',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 35, y: 45, w: 70, h: 24, label: 'Bit 0 Master-Slave DFF', componentId: 'FIN_DFF0', specs: { role: 'LSB Register stage', width: '1.2 μm', length: '12 nm' } },
+            { type: 'fin', x: 115, y: 45, w: 70, h: 24, label: 'Bit 1 Master-Slave DFF', componentId: 'FIN_DFF1', specs: { role: 'Bit 1 Register stage', width: '1.2 μm', length: '12 nm' } },
+            { type: 'fin', x: 195, y: 45, w: 70, h: 24, label: 'Bit 2 Master-Slave DFF', componentId: 'FIN_DFF2', specs: { role: 'Bit 2 Register stage', width: '1.2 μm', length: '12 nm' } },
+            { type: 'fin', x: 275, y: 45, w: 70, h: 24, label: 'Bit 3 Master-Slave DFF', componentId: 'FIN_DFF3', specs: { role: 'MSB Register stage', width: '1.2 μm', length: '12 nm' } },
+            { type: 'fin', x: 35, y: 165, w: 310, h: 24, label: 'Increment/Decrement Arithmetic ALU Fins', componentId: 'FIN_ALU', specs: { role: 'Computes next state count +/- 1', width: '0.8 μm' } },
+            { type: 'gate', x: 70, y: 30, w: 20, h: 180, label: 'Global Clock Tree Gate', componentId: 'GATE_CLK', specs: { role: 'Clock distribution', signal: 'CLK 1.2GHz' } },
+            { type: 'gate', x: 170, y: 30, w: 20, h: 180, label: 'Async Reset Gate', componentId: 'GATE_RST', specs: { role: 'Active-low reset', signal: 'RST_N' } },
+            { type: 'gate', x: 270, y: 30, w: 20, h: 180, label: 'Up/Down Select Gate', componentId: 'GATE_UPD', specs: { role: 'Direction control', signal: 'UP_DOWN' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Local Register Internal Clock & Feedback',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Power Rail', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 50, y: 75, w: 280, h: 28, label: 'DFF Next-State Feedback Bus', componentId: 'M1_FEEDBACK', specs: { role: 'DFF loop feedback', net: 'D[3:0]' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Output Bus Count[3:0]',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 55, y: 25, w: 18, h: 210, label: 'Count[0] Output', componentId: 'M2_Q0', specs: { net: 'count[0]', width: '28 nm' } },
+            { type: 'wire', x: 125, y: 25, w: 18, h: 210, label: 'Count[1] Output', componentId: 'M2_Q1', specs: { net: 'count[1]', width: '28 nm' } },
+            { type: 'wire', x: 195, y: 25, w: 18, h: 210, label: 'Count[2] Output', componentId: 'M2_Q2', specs: { net: 'count[2]', width: '28 nm' } },
+            { type: 'wire', x: 265, y: 25, w: 18, h: 210, label: 'Count[3] Output', componentId: 'M2_Q3', specs: { net: 'count[3]', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'm3',
+          name: 'Metal 3: H-Tree Balanced Clock Network',
+          level: 4,
+          thickness: 75,
+          sheetRes: '0.12 Ω/sq',
+          altitude: 180,
+          material: 'Copper (Cu)',
+          color: '#a855f7',
+          features: [
+            { type: 'wire', x: 40, y: 80, w: 300, h: 24, label: 'H-Tree Low-Skew Clock Trunk', componentId: 'M3_CLK', specs: { role: '1.2GHz clock trunk (<2ps skew)', frequency: '1.2 GHz' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Clock & Power TSV Bumps',
+          level: 5,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 235,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 155, y: 55, w: 65, h: 65, label: '3D TSV CLK In', componentId: 'TSV_CLK', specs: { role: 'Vertical clock microbump', frequency: '1.2 GHz' } },
+            { type: 'pad', x: 250, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 9. MULTIPLEXER (MUX4TO1)
+  if (d.includes('mux') || d.includes('multiplexer')) {
+    return {
+      chipName: '4-to-1 Multiplexer (MUX4_X1) 3D Silicon Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: '4-to-1 Transmission Gate Multiplexer',
+      booleanFormula: 'Y = D[Sel[1:0]]',
+      metrics: {
+        totalHeight: '7.8 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '2.9 ps/stage'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & Dual-Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Dual-Well Substrate Base', componentId: 'SUB_MUX', specs: { role: 'Pass-transistor multiplexer isolation', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 4-Channel CMOS Transmission Gates & Decoder',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 45, w: 70, h: 22, label: 'Pass-Gate Channel D0', componentId: 'FIN_TG0', specs: { role: 'Selected when Sel=00', width: '1.2 μm' } },
+            { type: 'fin', x: 120, y: 45, w: 70, h: 22, label: 'Pass-Gate Channel D1', componentId: 'FIN_TG1', specs: { role: 'Selected when Sel=01', width: '1.2 μm' } },
+            { type: 'fin', x: 200, y: 45, w: 70, h: 22, label: 'Pass-Gate Channel D2', componentId: 'FIN_TG2', specs: { role: 'Selected when Sel=10', width: '1.2 μm' } },
+            { type: 'fin', x: 280, y: 45, w: 70, h: 22, label: 'Pass-Gate Channel D3', componentId: 'FIN_TG3', specs: { role: 'Selected when Sel=11', width: '1.2 μm' } },
+            { type: 'gate', x: 100, y: 30, w: 22, h: 180, label: 'Select Gate Sel[0]', componentId: 'GATE_S0', specs: { signal: 'Sel[0]', dielectric: 'HfO2 (0.75nm)' } },
+            { type: 'gate', x: 220, y: 30, w: 22, h: 180, label: 'Select Gate Sel[1]', componentId: 'GATE_S1', specs: { signal: 'Sel[1]', dielectric: 'HfO2 (0.75nm)' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Shared Multiplexer Output Rail Y',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Power Rail', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 60, y: 80, w: 260, h: 40, label: 'Common Output Multiplex Bus (Co)', componentId: 'M1_MUX_OUT', specs: { role: 'Wired-OR pass channel sum', net: 'Y', delay: '2.9 ps' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Orthogonal Data Inputs D[0..3] & Output Y',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 50, y: 25, w: 16, h: 210, label: 'Input D[0] Line', componentId: 'M2_D0', specs: { net: 'D[0]', width: '28 nm' } },
+            { type: 'wire', x: 110, y: 25, w: 16, h: 210, label: 'Input D[1] Line', componentId: 'M2_D1', specs: { net: 'D[1]', width: '28 nm' } },
+            { type: 'wire', x: 170, y: 25, w: 16, h: 210, label: 'Input D[2] Line', componentId: 'M2_D2', specs: { net: 'D[2]', width: '28 nm' } },
+            { type: 'wire', x: 230, y: 25, w: 16, h: 210, label: 'Input D[3] Line', componentId: 'M2_D3', specs: { net: 'D[3]', width: '28 nm' } },
+            { type: 'wire', x: 290, y: 25, w: 16, h: 210, label: 'Output Y Track', componentId: 'M2_Y', specs: { net: 'Y', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global Power Mesh & TSVs',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 230, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 10. FIFO BUFFER / SRAM ARRAY
+  if (d.includes('fifo') || d.includes('sram') || d.includes('memory')) {
+    return {
+      chipName: 'Synchronous FIFO Buffer 3D Silicon & SRAM Stack',
+      technologyNode: '3nm GAA-FET / FinFET Node',
+      circuitType: 'Synchronous FIFO Dual-Port SRAM Array',
+      booleanFormula: 'Dual-Port Ring Buffer (wr_ptr, rd_ptr, count)',
+      metrics: {
+        totalHeight: '9.6 μm',
+        gatePitch: '42 nm (CPP)',
+        metal1Pitch: '28 nm (EUV)',
+        tsvDiameter: '1.2 μm',
+        interconnectDelay: '6.4 ps/access'
+      },
+      layers: [
+        {
+          id: 'sub',
+          name: 'Substrate & SRAM Well Isolation',
+          level: 0,
+          thickness: 400,
+          sheetRes: '10 Ω·cm',
+          altitude: 0,
+          material: 'Silicon Fin',
+          color: '#1e293b',
+          features: [
+            { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Isolated Substrate with Deep N-Well Guard', componentId: 'SUB_FIFO', specs: { role: 'SRAM memory matrix foundation', sheetRes: '10 Ω·cm' } }
+          ]
+        },
+        {
+          id: 'feol',
+          name: 'FEOL: 6T SRAM Bitcell Matrix & Dual Pointer Registers',
+          level: 1,
+          thickness: 65,
+          sheetRes: '2.5 Ω/sq',
+          altitude: 40,
+          material: 'Polysilicon',
+          color: '#ef4444',
+          features: [
+            { type: 'fin', x: 40, y: 45, w: 140, h: 30, label: '6T SRAM Core Matrix', componentId: 'FIN_SRAM', specs: { role: 'Dual-port storage array', bitCells: '16x8 Bit Matrix', width: '0.8 μm' } },
+            { type: 'fin', x: 200, y: 45, w: 140, h: 30, label: 'Sense Amplifier & Output Driver', componentId: 'FIN_SAMP', specs: { role: 'Differential read sense amps', width: '1.2 μm' } },
+            { type: 'fin', x: 40, y: 155, w: 140, h: 25, label: 'Write Pointer (wr_ptr) Register', componentId: 'FIN_WPTR', specs: { role: 'Circular write head tracker', width: '1.0 μm' } },
+            { type: 'fin', x: 200, y: 155, w: 140, h: 25, label: 'Read Pointer (rd_ptr) Register', componentId: 'FIN_RPTR', specs: { role: 'Circular read head tracker', width: '1.0 μm' } }
+          ]
+        },
+        {
+          id: 'm1',
+          name: 'Metal 1: Bitline & Wordline Grid (M1)',
+          level: 2,
+          thickness: 45,
+          sheetRes: '0.45 Ω/sq',
+          altitude: 85,
+          material: 'Cobalt (Co)',
+          color: '#3b82f6',
+          features: [
+            { type: 'wire', x: 30, y: 35, w: 320, h: 18, label: 'VDD Memory Power Strap', componentId: 'M1_VDD', specs: { voltage: '0.85 V' } },
+            { type: 'wire', x: 50, y: 85, w: 280, h: 24, label: 'Wordline Select Mesh (WL)', componentId: 'M1_WL', specs: { role: 'Row selection wordlines', sheetRes: '0.45 Ω/sq' } },
+            { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Memory Ground Strap', componentId: 'M1_VSS', specs: { voltage: '0.0 V (GND)' } }
+          ]
+        },
+        {
+          id: 'm2',
+          name: 'Metal 2: Data Input/Output 8-bit Buses',
+          level: 3,
+          thickness: 55,
+          sheetRes: '0.22 Ω/sq',
+          altitude: 130,
+          material: 'Copper (Cu)',
+          color: '#10b981',
+          features: [
+            { type: 'wire', x: 60, y: 25, w: 30, h: 210, label: 'Write Data Bus (wr_data[7:0])', componentId: 'M2_WRD', specs: { net: 'wr_data[7:0]', width: '28 nm' } },
+            { type: 'wire', x: 180, y: 25, w: 30, h: 210, label: 'Read Data Bus (rd_data[7:0])', componentId: 'M2_RDD', specs: { net: 'rd_data[7:0]', width: '28 nm' } },
+            { type: 'wire', x: 270, y: 25, w: 20, h: 210, label: 'Full / Empty Flags Line', componentId: 'M2_FLAGS', specs: { net: 'full, empty', width: '28 nm' } }
+          ]
+        },
+        {
+          id: 'top',
+          name: 'Top Metal 7: Global TSV Power Ring & Clocks',
+          level: 4,
+          thickness: 160,
+          sheetRes: '0.04 Ω/sq',
+          altitude: 185,
+          material: 'Copper (Cu)',
+          color: '#f59e0b',
+          features: [
+            { type: 'pad', x: 60, y: 55, w: 65, h: 65, label: '3D TSV VDD', componentId: 'TSV_VDD', specs: { diameter: '1.2 μm', cap: '6.5 fF' } },
+            { type: 'pad', x: 160, y: 55, w: 65, h: 65, label: '3D TSV Clock', componentId: 'TSV_CLK', specs: { role: 'Clock TSV' } },
+            { type: 'pad', x: 260, y: 55, w: 65, h: 65, label: '3D TSV VSS', componentId: 'TSV_VSS', specs: { diameter: '1.2 μm', cap: '6.5 fF' } }
+          ]
+        }
+      ]
+    };
+  }
+
+  // 11. DEFAULT / 2-INPUT NAND GATE (NAND2_X1)
   return {
-    chipName: `${modName.toUpperCase()} 3D Silicon & BEOL Stack`,
+    chipName: `${modName.toUpperCase()} 3D Silicon & 6-Level BEOL Stack`,
     technologyNode: '3nm GAA-FET / FinFET Node',
+    circuitType: '2-Input Complementary CMOS NAND Gate',
+    booleanFormula: 'Y = ~(A & B)',
     metrics: {
       totalHeight: '8.4 μm',
       gatePitch: '42 nm (CPP)',
@@ -984,7 +2452,7 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
     layers: [
       {
         id: 'sub',
-        name: 'P-Silicon Substrate',
+        name: 'P-Silicon Substrate & P-Well',
         level: 0,
         thickness: 400,
         sheetRes: '10 Ω·cm',
@@ -992,12 +2460,12 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Silicon Fin',
         color: '#1e293b',
         features: [
-          { type: 'wire', x: 20, y: 20, w: 340, h: 240, label: 'Bulk P-Silicon Wafer (<100> Orientation)' }
+          { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Bulk P-Silicon Wafer (<100> Orientation)', componentId: 'SUB_01', specs: { role: 'Semiconductor substrate base', material: 'Bulk Silicon', doping: 'Boron P-Type', sheetRes: '10 Ω·cm', thickness: '400 μm' } }
         ]
       },
       {
         id: 'feol',
-        name: 'FEOL: 3D FinFET Channels & HKMG Gates',
+        name: 'FEOL: Parallel PMOS & Series NMOS FinFETs',
         level: 1,
         thickness: 65,
         sheetRes: '2.5 Ω/sq',
@@ -1005,11 +2473,11 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Polysilicon',
         color: '#ef4444',
         features: [
-          { type: 'fin', x: 50, y: 50, w: 280, h: 20, label: 'N-Channel Fin 1' },
-          { type: 'fin', x: 50, y: 110, w: 280, h: 20, label: 'N-Channel Fin 2' },
-          { type: 'fin', x: 50, y: 170, w: 280, h: 20, label: 'P-Channel Fin 3' },
-          { type: 'gate', x: 120, y: 35, w: 24, h: 180, label: 'HKMG Gate A' },
-          { type: 'gate', x: 220, y: 35, w: 24, h: 180, label: 'HKMG Gate B' }
+          { type: 'fin', x: 50, y: 50, w: 280, h: 20, label: 'PMOS Parallel Fin MP1 (W=1.2μm)', componentId: 'FIN_P1', specs: { role: 'Pulls Y to VDD when Input A=0', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '140 cm²/V·s', ion: '1.4 mA/μm' } },
+          { type: 'fin', x: 50, y: 110, w: 280, h: 20, label: 'PMOS Parallel Fin MP2 (W=1.2μm)', componentId: 'FIN_P2', specs: { role: 'Pulls Y to VDD when Input B=0', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '140 cm²/V·s', ion: '1.4 mA/μm' } },
+          { type: 'fin', x: 50, y: 170, w: 280, h: 20, label: 'NMOS Series Fin MN1+MN2 (W=0.6μm)', componentId: 'FIN_N_SERIES', specs: { role: 'Pulls Y to VSS only when both A=1 and B=1', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '350 cm²/V·s', ion: '1.9 mA/μm' } },
+          { type: 'gate', x: 120, y: 35, w: 24, h: 180, label: 'HKMG Gate A', componentId: 'GATE_A', specs: { role: 'Gate electrode for Input A', signal: 'Input A', type: 'High-K Metal Gate', dielectric: 'HfO2 (EOT 0.75nm)', workFunction: '4.65 eV (TiN/TiAl)', gateCap: '0.85 fF' } },
+          { type: 'gate', x: 220, y: 35, w: 24, h: 180, label: 'HKMG Gate B', componentId: 'GATE_B', specs: { role: 'Gate electrode for Input B', signal: 'Input B', type: 'High-K Metal Gate', dielectric: 'HfO2 (EOT 0.75nm)', workFunction: '4.65 eV (TiN/TiAl)', gateCap: '0.85 fF' } }
         ]
       },
       {
@@ -1022,10 +2490,10 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Cobalt (Co)',
         color: '#3b82f6',
         features: [
-          { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1)' },
-          { type: 'wire', x: 110, y: 75, w: 45, h: 90, label: 'Internal Net Y (Co Liner)' },
-          { type: 'wire', x: 210, y: 75, w: 45, h: 90, label: 'Intermediate Node' },
-          { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail (M1)' }
+          { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1 Cobalt)', componentId: 'M1_VDD', specs: { role: 'Positive supply voltage rail', voltage: '0.85 V', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } },
+          { type: 'wire', x: 110, y: 75, w: 45, h: 90, label: 'Output Net Y (Co Liner)', componentId: 'M1_NET_Y', specs: { role: 'NAND output node', net: 'Y', parasiticC: '1.4 fF', delay: '2.4 ps' } },
+          { type: 'wire', x: 210, y: 75, w: 45, h: 90, label: 'Internal Series Node (N_INT)', componentId: 'M1_NODE_INT', specs: { role: 'Intermediate node between MN1 and MN2', net: 'N_INT', delay: '1.2 ps' } },
+          { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail (M1 Cobalt)', componentId: 'M1_VSS', specs: { role: 'Ground reference rail', voltage: '0.0 V (GND)', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } }
         ]
       },
       {
@@ -1038,9 +2506,9 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Copper (Cu)',
         color: '#10b981',
         features: [
-          { type: 'wire', x: 80, y: 25, w: 22, h: 210, label: 'Input A Net' },
-          { type: 'wire', x: 180, y: 25, w: 22, h: 210, label: 'Input B Net' },
-          { type: 'wire', x: 270, y: 25, w: 22, h: 210, label: 'Output Y Net' }
+          { type: 'wire', x: 80, y: 25, w: 22, h: 210, label: 'Input A Net (M2 Cu)', componentId: 'M2_A', specs: { role: 'Input A external routing', net: 'A', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.2 ps' } },
+          { type: 'wire', x: 180, y: 25, w: 22, h: 210, label: 'Input B Net (M2 Cu)', componentId: 'M2_B', specs: { role: 'Input B external routing', net: 'B', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.2 ps' } },
+          { type: 'wire', x: 270, y: 25, w: 22, h: 210, label: 'Output Y Net (M2 Cu)', componentId: 'M2_Y', specs: { role: 'Output Y external routing', net: 'Y (~(A & B))', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.5 ps' } }
         ]
       },
       {
@@ -1053,8 +2521,8 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Copper (Cu)',
         color: '#a855f7',
         features: [
-          { type: 'wire', x: 40, y: 70, w: 300, h: 28, label: 'Clock Trunk 1.2GHz' },
-          { type: 'wire', x: 40, y: 140, w: 300, h: 28, label: 'Reset Signal Net' }
+          { type: 'wire', x: 40, y: 70, w: 300, h: 28, label: 'Clock Trunk 1.2GHz', componentId: 'M3_CLK', specs: { role: 'High-speed clock routing trunk', net: 'CLK', frequency: '1.2 GHz', sheetRes: '0.12 Ω/sq' } },
+          { type: 'wire', x: 40, y: 140, w: 300, h: 28, label: 'Reset Signal Net', componentId: 'M3_RST', specs: { role: 'Synchronous reset distribution', net: 'RST', sheetRes: '0.12 Ω/sq' } }
         ]
       },
       {
@@ -1067,14 +2535,210 @@ export const generate3DChipData = async (rtlCode: string): Promise<any> => {
         material: 'Copper (Cu)',
         color: '#f59e0b',
         features: [
-          { type: 'pad', x: 60, y: 55, w: 70, h: 70, label: '3D TSV Bump 1' },
-          { type: 'pad', x: 230, y: 55, w: 70, h: 70, label: '3D TSV Bump 2' },
-          { type: 'wire', x: 20, y: 160, w: 340, h: 44, label: 'Global VDD Strap (M7)' }
+          { type: 'pad', x: 60, y: 55, w: 70, h: 70, label: '3D TSV Microbump 1 (VDD)', componentId: 'TSV_BUMP1', specs: { role: '3D vertical power microbump', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } },
+          { type: 'pad', x: 230, y: 55, w: 70, h: 70, label: '3D TSV Microbump 2 (VSS)', componentId: 'TSV_BUMP2', specs: { role: '3D vertical ground microbump', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } },
+          { type: 'wire', x: 20, y: 160, w: 340, h: 44, label: 'Global Ultra-Thick VDD Strap (M7)', componentId: 'M7_STRAP', specs: { role: 'Global power delivery mesh strap', thickness: '1.2 μm', width: '340 nm', sheetRes: '0.04 Ω/sq', currentMax: '65 mA' } }
         ]
       }
     ]
   };
 };
+
+export interface PinItem {
+  name: string;
+  width: string;
+  pinNumber?: number;
+}
+
+export interface PinDiagramData {
+  moduleName: string;
+  inputs: PinItem[];
+  outputs: PinItem[];
+  inouts?: PinItem[];
+}
+
+function parseVerilogPinsLocally(rtlCode: string): PinDiagramData {
+  // Extract module name
+  const moduleMatch = rtlCode.match(/module\s+([a-zA-Z0-9_$]+)/);
+  const moduleName = moduleMatch ? moduleMatch[1] : 'top_module';
+
+  const inputs: PinItem[] = [];
+  const outputs: PinItem[] = [];
+  const inouts: PinItem[] = [];
+
+  // Remove comments
+  const cleanCode = rtlCode
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+
+  // Extract ANSI port declarations like `input wire [3:0] a` or `output reg y`
+  const portRegex = /(input|output|inout)\s+(?:wire|reg\s+)?(?:(\[[^\]]+\])\s+)?([a-zA-Z0-9_$,\s]+)/g;
+  let match;
+  while ((match = portRegex.exec(cleanCode)) !== null) {
+    const direction = match[1];
+    const width = match[2] ? match[2].trim() : '';
+    const namesStr = match[3];
+
+    const names = namesStr
+      .split(',')
+      .map(n => n.trim())
+      .filter(n => n.length > 0 && !['wire', 'reg', 'input', 'output', 'inout'].includes(n));
+
+    names.forEach(name => {
+      // Clean possible trailing semicolons or parentheses
+      const cleanName = name.replace(/[;()]/g, '').trim();
+      if (!cleanName) return;
+
+      if (direction === 'input') {
+        if (!inputs.some(p => p.name === cleanName)) {
+          inputs.push({ name: cleanName, width });
+        }
+      } else if (direction === 'output') {
+        if (!outputs.some(p => p.name === cleanName)) {
+          outputs.push({ name: cleanName, width });
+        }
+      } else if (direction === 'inout') {
+        if (!inouts.some(p => p.name === cleanName)) {
+          inouts.push({ name: cleanName, width });
+        }
+      }
+    });
+  }
+
+  // Fallback if regex didn't find ports
+  if (inputs.length === 0 && outputs.length === 0) {
+    const d = rtlCode.toLowerCase();
+    if (d.includes('and') || d.includes('or') || d.includes('xor') || d.includes('nand') || d.includes('nor') || d.includes('xnor')) {
+      inputs.push({ name: 'a', width: '' });
+      inputs.push({ name: 'b', width: '' });
+      outputs.push({ name: 'y', width: '' });
+    } else if (d.includes('not') || d.includes('inv')) {
+      inputs.push({ name: 'a', width: '' });
+      outputs.push({ name: 'y', width: '' });
+    } else if (d.includes('adder')) {
+      inputs.push({ name: 'a', width: '[3:0]' });
+      inputs.push({ name: 'b', width: '[3:0]' });
+      inputs.push({ name: 'cin', width: '' });
+      outputs.push({ name: 'sum', width: '[3:0]' });
+      outputs.push({ name: 'cout', width: '' });
+    } else if (d.includes('counter')) {
+      inputs.push({ name: 'clk', width: '' });
+      inputs.push({ name: 'rst_n', width: '' });
+      inputs.push({ name: 'enable', width: '' });
+      inputs.push({ name: 'up_down', width: '' });
+      outputs.push({ name: 'count', width: '[3:0]' });
+    } else {
+      inputs.push({ name: 'in_1', width: '' });
+      inputs.push({ name: 'in_2', width: '' });
+      outputs.push({ name: 'out_1', width: '' });
+    }
+  }
+
+  let currentPin = 1;
+  const assignPinNumbers = (list: PinItem[]) => {
+    return list.map(p => ({
+      ...p,
+      pinNumber: currentPin++
+    }));
+  };
+
+  return {
+    moduleName,
+    inputs: assignPinNumbers(inputs),
+    outputs: assignPinNumbers(outputs),
+    inouts: assignPinNumbers(inouts)
+  };
+}
+
+export const generatePinDiagramData = async (rtlCode: string): Promise<PinDiagramData | null> => {
+  if (!rtlCode || rtlCode.startsWith('// Enter')) return null;
+
+  const ai = getAiInstance();
+  if (ai) {
+    try {
+      const prompt = `Analyze this Verilog module and return its input/output pinout specification for physical IC DIP packaging and logic symbol diagram:
+${rtlCode}
+
+Return valid JSON with:
+- moduleName: string (e.g. "and_gate", "full_adder_4bit")
+- inputs: array of { "name": string, "width": string }
+- outputs: array of { "name": string, "width": string }
+- inouts: array of { "name": string, "width": string } (optional)`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              moduleName: { type: Type.STRING },
+              inputs: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    width: { type: Type.STRING }
+                  },
+                  required: ['name']
+                }
+              },
+              outputs: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    width: { type: Type.STRING }
+                  },
+                  required: ['name']
+                }
+              },
+              inouts: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    width: { type: Type.STRING }
+                  },
+                  required: ['name']
+                }
+              }
+            },
+            required: ['moduleName', 'inputs', 'outputs']
+          }
+        }
+      });
+
+      if (response.text) {
+        const parsed = JSON.parse(response.text);
+        if (parsed.moduleName && (parsed.inputs || parsed.outputs)) {
+          let pinCount = 1;
+          const mapPins = (list: any[] = []) => list.map(p => ({
+            name: p.name,
+            width: p.width || '',
+            pinNumber: pinCount++
+          }));
+          return {
+            moduleName: parsed.moduleName,
+            inputs: mapPins(parsed.inputs),
+            outputs: mapPins(parsed.outputs),
+            inouts: mapPins(parsed.inouts || [])
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('AI Pin Diagram generation failed, using local parser:', e);
+    }
+  }
+
+  return parseVerilogPinsLocally(rtlCode);
+};
+
+
 
 
 

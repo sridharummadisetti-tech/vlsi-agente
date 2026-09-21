@@ -20,10 +20,29 @@ import {
   Layers3,
   Image as ImageIcon,
   Cuboid,
-  Download,
-  Share2,
-  X
+  X,
+  Cpu,
+  Activity,
+  CheckCircle2,
+  CircuitBoard,
+  ChevronRight,
+  ArrowUpRight
 } from 'lucide-react';
+
+export interface ComponentSpecs {
+  [key: string]: any;
+}
+
+export interface MetalFeature3D {
+  type: 'wire' | 'via' | 'fin' | 'gate' | 'pad' | 'diffusion';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label?: string;
+  componentId?: string;
+  specs?: ComponentSpecs;
+}
 
 export interface MetalLayer3D {
   id: string;
@@ -31,30 +50,18 @@ export interface MetalLayer3D {
   level: number;
   thickness: number; // in nm
   sheetRes: string;
-  material: 'Copper (Cu)' | 'Cobalt (Co)' | 'Tungsten (W)' | 'Ruthenium (Ru)' | 'Polysilicon' | 'Silicon Fin';
+  material: string;
   color: string;
-  altitude: number; // Z-position in nm/units
-  features: {
-    type: 'wire' | 'via' | 'fin' | 'gate' | 'pad' | 'diffusion';
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    label?: string;
-  }[];
+  altitude: number;
+  features: MetalFeature3D[];
 }
 
 export interface ThreeDChipData {
   chipName: string;
   technologyNode: string;
+  circuitType?: string;
+  booleanFormula?: string;
   layers: MetalLayer3D[];
-  vias?: {
-    fromLayer: string;
-    toLayer: string;
-    x: number;
-    y: number;
-    size: number;
-  }[];
   metrics: {
     totalHeight: string;
     gatePitch: string;
@@ -64,22 +71,35 @@ export interface ThreeDChipData {
   };
 }
 
+interface SelectedSpec {
+  title: string;
+  category: string;
+  role: string;
+  material: string;
+  geometry: string;
+  electrical: { [key: string]: string };
+  drcRule: string;
+}
+
 interface ThreeDCircuitViewerProps {
   data?: ThreeDChipData | null;
 }
 
 export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
-  // Mode: 'render' (photorealistic 3D image) or 'cad' (interactive 3D CSS model)
-  const [viewMode, setViewMode] = useState<'render' | 'cad'>('render');
+  // Mode: 'cad' (3D Interactive Orbit Stack) or 'render' (3D Cross-Section View)
+  const [viewMode, setViewMode] = useState<'cad' | 'render'>('cad');
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Selected Component for In-Diagram HUD Specification Card
+  const [selectedSpec, setSelectedSpec] = useState<SelectedSpec | null>(null);
 
   // 3D Rotation Angles
   const [rotX, setRotX] = useState(60); // Pitch
   const [rotZ, setRotZ] = useState(-35); // Yaw
   const [explosionZ, setExplosionZ] = useState(1.4); // Z-separation factor
   const [zoom, setZoom] = useState(1.0);
-  const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
-  const [hoveredFeature, setHoveredFeature] = useState<string | null>(null);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
   const [showDielectric, setShowDielectric] = useState(false);
   const [isAutoRotating, setIsAutoRotating] = useState(false);
   const [hiddenLayerIds, setHiddenLayerIds] = useState<Record<string, boolean>>({});
@@ -91,7 +111,7 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
 
   // Auto-rotation effect
   useEffect(() => {
-    if (isAutoRotating && viewMode === 'cad') {
+    if (isAutoRotating) {
       const step = () => {
         setRotZ(prev => (prev + 0.4) % 360);
         animFrameRef.current = requestAnimationFrame(step);
@@ -103,7 +123,7 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isAutoRotating, viewMode]);
+  }, [isAutoRotating]);
 
   // Handle ESC key to exit fullscreen
   useEffect(() => {
@@ -117,8 +137,10 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
   }, [isFullscreen]);
 
   const defaultData: ThreeDChipData = data || {
-    chipName: '3nm FinFET & 7-Level BEOL Multilevel Stack',
-    technologyNode: '3nm GAA-FET / FinFET Technology',
+    chipName: '2-Input NAND Gate (NAND2_X1) 3D Silicon Stack',
+    technologyNode: '3nm GAA-FET / FinFET Node',
+    circuitType: '2-Input CMOS NAND Gate',
+    booleanFormula: 'Y = ~(A & B)',
     metrics: {
       totalHeight: '8.4 μm',
       gatePitch: '42 nm (CPP)',
@@ -129,7 +151,7 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
     layers: [
       {
         id: 'sub',
-        name: 'P-Type Silicon Substrate',
+        name: 'P-Silicon Substrate & P-Well',
         level: 0,
         thickness: 400,
         sheetRes: '10 Ω·cm',
@@ -137,12 +159,12 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Silicon Fin',
         color: '#1e293b',
         features: [
-          { type: 'wire', x: 20, y: 20, w: 340, h: 240, label: 'Bulk P-Silicon Wafer (<100> Lattice)' }
+          { type: 'diffusion', x: 20, y: 20, w: 340, h: 240, label: 'Bulk P-Silicon Wafer (<100> Orientation)', componentId: 'SUB_01', specs: { role: 'Semiconductor substrate base', material: 'Bulk Silicon', doping: 'Boron P-Type', sheetRes: '10 Ω·cm', thickness: '400 μm' } }
         ]
       },
       {
         id: 'feol',
-        name: 'FEOL: 3D FinFET Channels & HKMG Gate',
+        name: 'FEOL: Parallel PMOS & Series NMOS FinFETs',
         level: 1,
         thickness: 65,
         sheetRes: '2.5 Ω/sq',
@@ -150,16 +172,16 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Polysilicon',
         color: '#ef4444',
         features: [
-          { type: 'fin', x: 50, y: 50, w: 280, h: 20, label: 'N-Channel 3D Fin (Drain/Source)' },
-          { type: 'fin', x: 50, y: 110, w: 280, h: 20, label: 'N-Channel 3D Fin (Drain/Source)' },
-          { type: 'fin', x: 50, y: 170, w: 280, h: 20, label: 'P-Channel 3D Fin (Epitaxial SiGe)' },
-          { type: 'gate', x: 120, y: 35, w: 24, h: 180, label: 'Gate A (High-K Metal Gate)' },
-          { type: 'gate', x: 220, y: 35, w: 24, h: 180, label: 'Gate B (High-K Metal Gate)' }
+          { type: 'fin', x: 50, y: 50, w: 280, h: 20, label: 'PMOS Parallel Fin MP1 (W=1.2μm)', componentId: 'FIN_P1', specs: { role: 'Pulls Y to VDD when Input A=0', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '140 cm²/V·s', ion: '1.4 mA/μm' } },
+          { type: 'fin', x: 50, y: 110, w: 280, h: 20, label: 'PMOS Parallel Fin MP2 (W=1.2μm)', componentId: 'FIN_P2', specs: { role: 'Pulls Y to VDD when Input B=0', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '140 cm²/V·s', ion: '1.4 mA/μm' } },
+          { type: 'fin', x: 50, y: 170, w: 280, h: 20, label: 'NMOS Series Fin MN1+MN2 (W=0.6μm)', componentId: 'FIN_N_SERIES', specs: { role: 'Pulls Y to VSS only when both A=1 and B=1', type: '3D FinFET Fin', channelLength: '12 nm', finHeight: '45 nm', finWidth: '5 nm', mobility: '350 cm²/V·s', ion: '1.9 mA/μm' } },
+          { type: 'gate', x: 120, y: 35, w: 24, h: 180, label: 'HKMG Gate A', componentId: 'GATE_A', specs: { role: 'Gate electrode for Input A', signal: 'Input A', type: 'High-K Metal Gate', dielectric: 'HfO2 (EOT 0.75nm)', workFunction: '4.65 eV (TiN/TiAl)', gateCap: '0.85 fF' } },
+          { type: 'gate', x: 220, y: 35, w: 24, h: 180, label: 'HKMG Gate B', componentId: 'GATE_B', specs: { role: 'Gate electrode for Input B', signal: 'Input B', type: 'High-K Metal Gate', dielectric: 'HfO2 (EOT 0.75nm)', workFunction: '4.65 eV (TiN/TiAl)', gateCap: '0.85 fF' } }
         ]
       },
       {
         id: 'm1',
-        name: 'Metal 1: Local Standard Cell Rails (M1)',
+        name: 'Metal 1: Local Power & Interconnect Rails (M1)',
         level: 2,
         thickness: 45,
         sheetRes: '0.45 Ω/sq',
@@ -167,15 +189,15 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Cobalt (Co)',
         color: '#3b82f6',
         features: [
-          { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1)' },
-          { type: 'wire', x: 110, y: 75, w: 45, h: 90, label: 'Internal Net Y (Co Liner)' },
-          { type: 'wire', x: 210, y: 75, w: 45, h: 90, label: 'Intermediate Node' },
-          { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail (M1)' }
+          { type: 'wire', x: 30, y: 40, w: 320, h: 18, label: 'VDD Power Rail (M1 Cobalt)', componentId: 'M1_VDD', specs: { role: 'Positive supply voltage rail', voltage: '0.85 V', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } },
+          { type: 'wire', x: 110, y: 75, w: 45, h: 90, label: 'Output Net Y (Co Liner)', componentId: 'M1_NET_Y', specs: { role: 'NAND output node', net: 'Y', parasiticC: '1.4 fF', delay: '2.4 ps' } },
+          { type: 'wire', x: 210, y: 75, w: 45, h: 90, label: 'Internal Series Node (N_INT)', componentId: 'M1_NODE_INT', specs: { role: 'Intermediate node between MN1 and MN2', net: 'N_INT', delay: '1.2 ps' } },
+          { type: 'wire', x: 30, y: 210, w: 320, h: 18, label: 'VSS Ground Rail (M1 Cobalt)', componentId: 'M1_VSS', specs: { role: 'Ground reference rail', voltage: '0.0 V (GND)', width: '32 nm', sheetRes: '0.45 Ω/sq', currentMax: '15 mA' } }
         ]
       },
       {
         id: 'm2',
-        name: 'Metal 2: Orthogonal Routing Grid (M2)',
+        name: 'Metal 2: Orthogonal Signal Routing (M2)',
         level: 3,
         thickness: 55,
         sheetRes: '0.22 Ω/sq',
@@ -183,14 +205,14 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Copper (Cu)',
         color: '#10b981',
         features: [
-          { type: 'wire', x: 80, y: 25, w: 22, h: 210, label: 'Input A Net' },
-          { type: 'wire', x: 180, y: 25, w: 22, h: 210, label: 'Input B Net' },
-          { type: 'wire', x: 270, y: 25, w: 22, h: 210, label: 'Output Y Net' }
+          { type: 'wire', x: 80, y: 25, w: 22, h: 210, label: 'Input A Net (M2 Cu)', componentId: 'M2_A', specs: { role: 'Input A external routing', net: 'A', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.2 ps' } },
+          { type: 'wire', x: 180, y: 25, w: 22, h: 210, label: 'Input B Net (M2 Cu)', componentId: 'M2_B', specs: { role: 'Input B external routing', net: 'B', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.2 ps' } },
+          { type: 'wire', x: 270, y: 25, w: 22, h: 210, label: 'Output Y Net (M2 Cu)', componentId: 'M2_Y', specs: { role: 'Output Y external routing', net: 'Y (~(A & B))', width: '28 nm', sheetRes: '0.22 Ω/sq', rcDelay: '1.5 ps' } }
         ]
       },
       {
         id: 'm3',
-        name: 'Metal 3: Semi-Global Signal Bus (M3)',
+        name: 'Metal 3: Semi-Global Clock & Bus (M3)',
         level: 4,
         thickness: 75,
         sheetRes: '0.12 Ω/sq',
@@ -198,8 +220,8 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Copper (Cu)',
         color: '#a855f7',
         features: [
-          { type: 'wire', x: 40, y: 70, w: 300, h: 28, label: 'Clock Trunk 1.2GHz' },
-          { type: 'wire', x: 40, y: 140, w: 300, h: 28, label: 'Synchronous Reset' }
+          { type: 'wire', x: 40, y: 70, w: 300, h: 28, label: 'Clock Trunk 1.2GHz', componentId: 'M3_CLK', specs: { role: 'High-speed clock routing trunk', net: 'CLK', frequency: '1.2 GHz', sheetRes: '0.12 Ω/sq' } },
+          { type: 'wire', x: 40, y: 140, w: 300, h: 28, label: 'Reset Signal Net', componentId: 'M3_RST', specs: { role: 'Synchronous reset distribution', net: 'RST', sheetRes: '0.12 Ω/sq' } }
         ]
       },
       {
@@ -212,13 +234,33 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
         material: 'Copper (Cu)',
         color: '#f59e0b',
         features: [
-          { type: 'pad', x: 60, y: 55, w: 70, h: 70, label: '3D TSV Microbump 1 (VDD)' },
-          { type: 'pad', x: 230, y: 55, w: 70, h: 70, label: '3D TSV Microbump 2 (VSS)' },
-          { type: 'wire', x: 20, y: 160, w: 340, h: 44, label: 'Global VDD Power Strap (M7 Ultra-Thick)' }
+          { type: 'pad', x: 60, y: 55, w: 70, h: 70, label: '3D TSV Microbump 1 (VDD)', componentId: 'TSV_BUMP1', specs: { role: '3D vertical power microbump', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } },
+          { type: 'pad', x: 230, y: 55, w: 70, h: 70, label: '3D TSV Microbump 2 (VSS)', componentId: 'TSV_BUMP2', specs: { role: '3D vertical ground microbump', diameter: '1.2 μm', height: '1.8 μm', resistance: '0.012 Ω', cap: '6.5 fF' } },
+          { type: 'wire', x: 20, y: 160, w: 340, h: 44, label: 'Global Ultra-Thick VDD Strap (M7)', componentId: 'M7_STRAP', specs: { role: 'Global power delivery mesh strap', thickness: '1.2 μm', width: '340 nm', sheetRes: '0.04 Ω/sq', currentMax: '65 mA' } }
         ]
       }
     ]
   };
+
+  // Set initial selected spec to the first interesting feature
+  useEffect(() => {
+    if (defaultData && defaultData.layers[1]?.features[0]) {
+      const f = defaultData.layers[1].features[0];
+      setSelectedSpec({
+        title: f.label || '3D FinFET Channel',
+        category: 'FEOL Active Transistor',
+        role: f.specs?.role || 'Tri-gate conduction channel',
+        material: 'Single-Crystal Silicon & High-K Metal Gate',
+        geometry: 'Fin Height: 45 nm • Width: 5 nm • Lg: 12 nm',
+        electrical: {
+          'Drive Current (Ion)': f.specs?.ion || '1.8 mA/μm',
+          'Leakage (Ioff)': f.specs?.ioff || '2.0 nA/μm',
+          'Threshold Voltage (Vth)': '0.28 V'
+        },
+        drcRule: 'Contacted Poly Pitch (CPP): 42 nm'
+      });
+    }
+  }, [defaultData.chipName]);
 
   const toggleLayerVisibility = (id: string) => {
     setHiddenLayerIds(prev => ({ ...prev, [id]: !prev[id] }));
@@ -234,19 +276,41 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
       setRotZ(prev => prev + dx * 0.5);
-      setRotX(prev => Math.min(Math.max(prev - dy * 0.5, 5), 88));
+      setRotX(prev => Math.min(Math.max(prev - dy * 0.5, 0), 90));
       setDragStart({ x: e.clientX, y: e.clientY });
     }
   };
 
   const handleMouseUp = () => setIsDragging(false);
 
-  const selectedLayerData = defaultData.layers.find(l => l.id === selectedLayer);
+  const applyViewPreset = (pitch: number, yaw: number) => {
+    setRotX(pitch);
+    setRotZ(yaw);
+    setIsAutoRotating(false);
+  };
+
+  const handleSelectFeature = (layer: MetalLayer3D, feat: MetalFeature3D) => {
+    setSelectedSpec({
+      title: feat.label || feat.type.toUpperCase(),
+      category: layer.name,
+      role: feat.specs?.role || `Conduction path in ${layer.name}`,
+      material: layer.material,
+      geometry: `Thickness: ${layer.thickness} nm • Level: L${layer.level}`,
+      electrical: {
+        'Sheet Resistance (Rs)': layer.sheetRes,
+        ...(feat.specs?.voltage ? { 'Operating Voltage': feat.specs.voltage } : {}),
+        ...(feat.specs?.delay ? { 'Propagation Delay': feat.specs.delay } : {}),
+        ...(feat.specs?.currentMax ? { 'Max Current': feat.specs.currentMax } : {}),
+        ...(feat.specs?.parasiticC ? { 'Parasitic Capacitance': feat.specs.parasiticC } : {})
+      },
+      drcRule: `Min Pitch for ${layer.name}: 28nm EUV`
+    });
+  };
 
   return (
     <div className={`w-full h-full flex flex-col bg-[#0a0d12] text-gray-200 select-none ${isFullscreen ? 'fixed inset-0 z-50 overflow-hidden' : 'overflow-y-auto'}`}>
       
-      {/* Top Banner Controls */}
+      {/* Top Banner & Control Bar */}
       <div className="p-3 bg-[#111620] border-b border-white/10 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
         <div className="flex items-center space-x-3">
           <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg border border-cyan-500/20">
@@ -255,15 +319,20 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
           <div>
             <h2 className="text-sm font-semibold text-gray-100 flex items-center space-x-2">
               <span>{defaultData.chipName}</span>
-              <span className="text-[10px] bg-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-500/30">
+              <span className="text-[10px] bg-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-500/30 font-mono">
                 {defaultData.technologyNode}
               </span>
+              {defaultData.booleanFormula && (
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30 font-mono">
+                  {defaultData.booleanFormula}
+                </span>
+              )}
             </h2>
-            <p className="text-xs text-gray-400">3D Nanometer Cross-Section • FinFET Semiconductor Channels • BEOL Interconnect Mesh</p>
+            <p className="text-xs text-gray-400">Dynamic 3D Silicon Stack • Click any block in the 3D diagram to view its specifications</p>
           </div>
         </div>
 
-        {/* Mode Switcher & Fullscreen Action */}
+        {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
           
           {/* Mode Switcher */}
@@ -277,7 +346,7 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
               }`}
             >
               <ImageIcon size={13} />
-              <span>3D Render</span>
+              <span>3D Cross-Section (Dynamic)</span>
             </button>
             <button
               onClick={() => setViewMode('cad')}
@@ -288,56 +357,77 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
               }`}
             >
               <Cuboid size={13} />
-              <span>Interactive CAD</span>
+              <span>3D CAD Orbit</span>
             </button>
           </div>
 
-          {/* CAD-specific Controls */}
+          {/* Preset Angle Views (in CAD mode) */}
           {viewMode === 'cad' && (
-            <>
-              {/* Layer Explosion Slider */}
-              <div className="flex items-center space-x-2 bg-black/40 px-3 py-1.5 rounded-lg border border-white/10">
-                <Sliders size={13} className="text-cyan-400" />
-                <span className="text-gray-400">Z-Explosion:</span>
-                <input 
-                  type="range" 
-                  min="0.4" 
-                  max="2.8" 
-                  step="0.1"
-                  value={explosionZ} 
-                  onChange={e => setExplosionZ(parseFloat(e.target.value))}
-                  className="w-18 accent-cyan-400 cursor-pointer"
-                />
-                <span className="text-cyan-300 w-8">{explosionZ.toFixed(1)}x</span>
-              </div>
-
-              {/* Auto Rotate Toggle */}
+            <div className="flex items-center space-x-1 bg-black/40 p-1 rounded-lg border border-white/10">
+              <span className="text-[10px] text-gray-400 px-1">Angles:</span>
               <button
-                onClick={() => setIsAutoRotating(!isAutoRotating)}
-                className={`px-2.5 py-1.5 rounded-md border transition-all flex items-center space-x-1.5 cursor-pointer ${
-                  isAutoRotating 
-                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 font-semibold' 
-                    : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
-                }`}
-                title="Auto-rotate 3D Viewport"
+                onClick={() => applyViewPreset(60, -35)}
+                className={`px-2 py-0.5 text-[10px] rounded transition-colors cursor-pointer ${rotX === 60 && rotZ === -35 ? 'bg-cyan-500/30 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
+                title="Isometric 3D Perspective"
               >
-                {isAutoRotating ? <Pause size={13} /> : <Play size={13} />}
-                <span>Spin</span>
+                Iso
               </button>
-
-              {/* Dielectric Toggle */}
               <button
-                onClick={() => setShowDielectric(!showDielectric)}
-                className={`px-2.5 py-1.5 rounded-md border transition-all flex items-center space-x-1.5 cursor-pointer ${
-                  showDielectric 
-                    ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 font-semibold' 
-                    : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
-                }`}
+                onClick={() => applyViewPreset(0, 0)}
+                className={`px-2 py-0.5 text-[10px] rounded transition-colors cursor-pointer ${rotX === 0 && rotZ === 0 ? 'bg-cyan-500/30 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
+                title="Top-Down Die Layout"
               >
-                <Layers size={13} />
-                <span>Oxide</span>
+                Top
               </button>
-            </>
+              <button
+                onClick={() => applyViewPreset(90, 0)}
+                className={`px-2 py-0.5 text-[10px] rounded transition-colors cursor-pointer ${rotX === 90 && rotZ === 0 ? 'bg-cyan-500/30 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
+                title="Cross-Section Layer View"
+              >
+                Side
+              </button>
+              <button
+                onClick={() => applyViewPreset(45, -45)}
+                className={`px-2 py-0.5 text-[10px] rounded transition-colors cursor-pointer ${rotX === 45 && rotZ === -45 ? 'bg-cyan-500/30 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
+                title="45-Degree Angled"
+              >
+                45°
+              </button>
+            </div>
+          )}
+
+          {/* CAD Z-Peel Slider */}
+          {viewMode === 'cad' && (
+            <div className="flex items-center space-x-2 bg-black/40 px-3 py-1.5 rounded-lg border border-white/10">
+              <Sliders size={13} className="text-cyan-400" />
+              <span className="text-gray-400">Z-Peel:</span>
+              <input 
+                type="range" 
+                min="0.4" 
+                max="2.8" 
+                step="0.1"
+                value={explosionZ} 
+                onChange={e => setExplosionZ(parseFloat(e.target.value))}
+                className="w-16 accent-cyan-400 cursor-pointer"
+              />
+              <span className="text-cyan-300 w-8">{explosionZ.toFixed(1)}x</span>
+            </div>
+          )}
+
+          {/* Auto Rotate Toggle */}
+          {viewMode === 'cad' && (
+            <button
+              onClick={() => setIsAutoRotating(!isAutoRotating)}
+              className={`px-2.5 py-1.5 rounded-md border transition-all flex items-center space-x-1.5 cursor-pointer ${
+                isAutoRotating 
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 font-semibold' 
+                  : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
+              }`}
+              title="Auto-rotate 3D Viewport"
+            >
+              {isAutoRotating ? <Pause size={13} /> : <Play size={13} />}
+              <span>Spin</span>
+            </button>
           )}
 
           {/* Zoom Buttons */}
@@ -370,45 +460,233 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
             title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Enter Fullscreen'}
           >
             {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+            <span>{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
           </button>
         </div>
       </div>
 
-      {/* Main Content Stage */}
+      {/* Main 3D Canvas with In-Diagram Specification Overlay */}
       <div className="flex-1 flex flex-col xl:flex-row gap-4 p-4 overflow-hidden relative">
         
-        {/* VIEW MODE 1: PHOTOREALISTIC 3D IMAGE RENDERING */}
+        {/* VIEW MODE 1: PHOTOREALISTIC 3D SEMICONDUCTOR CROSS-SECTION RENDER WITH DIRECT IN-DIAGRAM HOTSPOTS */}
         {viewMode === 'render' && (
           <div className="flex-1 h-full flex flex-col items-center justify-center bg-[#07090e] border border-white/10 rounded-2xl overflow-hidden relative shadow-2xl group">
             
-            {/* Image Container with Zoom */}
-            <div className="w-full h-full flex items-center justify-center overflow-hidden p-2">
-              <img
-                src="/silicon_3d_render.jpg"
-                alt="3D FinFET Silicon & Multilevel BEOL Interconnect Stack"
-                className="max-w-full max-h-full object-contain rounded-xl shadow-2xl transition-transform duration-200"
+            {/* 3D Visual Render & Hotspots Area */}
+            <div className="relative w-full h-full flex items-center justify-center overflow-hidden p-3">
+              <div 
+                className="relative max-w-full max-h-full flex items-center justify-center transition-transform duration-200"
                 style={{ transform: `scale(${zoom})` }}
-              />
+              >
+                {/* Photorealistic 3D Silicon Stack Render Image */}
+                <div className="relative rounded-2xl overflow-hidden border border-cyan-500/30 shadow-2xl shadow-cyan-950/50 group/img max-w-[840px] w-full">
+                  <img 
+                    src="/images/chip_3d_render.jpg" 
+                    alt="3D FinFET Silicon Stack Photorealistic Cross-Section" 
+                    className="w-full h-auto object-cover rounded-2xl drop-shadow-2xl brightness-105 contrast-105"
+                  />
+
+                  {/* Gradient Lighting & Edge Vignette */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30 pointer-events-none rounded-2xl" />
+
+                  {/* Top Badge Overlay on 3D Render */}
+                  <div className="absolute top-3 left-3 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/15 text-[11px] font-mono flex items-center space-x-2 text-gray-200 shadow-xl pointer-events-none">
+                    <Sparkles size={14} className="text-cyan-400" />
+                    <span>3D GAA-FET / FinFET Silicon Cross-Section</span>
+                    <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-500/30">
+                      {defaultData.chipName}
+                    </span>
+                  </div>
+
+                  {/* INTERACTIVE HOTSPOT 1: TOP 3D TSV MICROBUMPS & GOLD POWER STRAPS */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[defaultData.layers.length - 1], defaultData.layers[defaultData.layers.length - 1].features[0])}
+                    className="absolute top-[8%] left-[16%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-amber-500 border-2 border-white shadow-lg shadow-amber-500/50"></span>
+                      <div className="absolute left-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-amber-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-amber-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        Top TSV Microbumps (M7)
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 2: GOLD POWER STRAPS */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[defaultData.layers.length - 1], defaultData.layers[defaultData.layers.length - 1].features[defaultData.layers[defaultData.layers.length - 1].features.length - 1] || defaultData.layers[defaultData.layers.length - 1].features[0])}
+                    className="absolute top-[6%] right-[28%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-amber-500 border-2 border-white shadow-lg shadow-amber-500/50"></span>
+                      <div className="absolute right-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-amber-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-amber-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        Gold Power Delivery Straps
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 3: MULTI-LAYER COPPER BEOL INTERCONNECTS (M2-M6) */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[3] || defaultData.layers[2], (defaultData.layers[3] || defaultData.layers[2]).features[0])}
+                    className="absolute top-[32%] left-[42%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-cyan-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-cyan-500 border-2 border-white shadow-lg shadow-cyan-500/50"></span>
+                      <div className="absolute left-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-cyan-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-cyan-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        BEOL Copper Routing Mesh (M2-M6)
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 4: COBALT M1 LOCAL INTERCONNECTS */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[2], defaultData.layers[2].features[0])}
+                    className="absolute top-[48%] left-[34%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-blue-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50"></span>
+                      <div className="absolute left-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-blue-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-blue-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        Cobalt M1 Power Rails (VDD/VSS)
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 5: 3D FINFET & 3nm HKMG ACTIVE GATES */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[1], defaultData.layers[1].features[0])}
+                    className="absolute top-[65%] left-[32%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-white shadow-lg shadow-red-500/50"></span>
+                      <div className="absolute right-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-red-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-red-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        3D FinFET Active Fins (3nm HKMG)
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 6: GAA-FET NANOSHEET STACK */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[1], defaultData.layers[1].features[defaultData.layers[1].features.length - 1] || defaultData.layers[1].features[0])}
+                    className="absolute top-[68%] right-[28%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border-2 border-white shadow-lg shadow-emerald-500/50"></span>
+                      <div className="absolute left-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-emerald-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-emerald-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        GAA-FET Nanosheet Stack
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* INTERACTIVE HOTSPOT 7: BULK SILICON SUBSTRATE */}
+                  <button 
+                    onClick={() => handleSelectFeature(defaultData.layers[0], defaultData.layers[0].features[0])}
+                    className="absolute bottom-[8%] left-[22%] -translate-x-1/2 -translate-y-1/2 z-20 group/hs cursor-pointer"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-slate-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-slate-500 border-2 border-white shadow-lg shadow-slate-500/50"></span>
+                      <div className="absolute left-6 whitespace-nowrap bg-black/90 backdrop-blur-md text-slate-300 text-[10px] font-mono px-2.5 py-1 rounded-md border border-slate-500/40 shadow-xl opacity-90 group-hover/hs:opacity-100 group-hover/hs:scale-105 transition-all">
+                        P-Silicon Substrate Base (&lt;100&gt; Si)
+                      </div>
+                    </div>
+                  </button>
+
+                </div>
+
+                {/* IN-DIAGRAM FLOATING SPECIFICATION CARD DIRECTLY ON TOP OF THE 3D CANVAS */}
+                {selectedSpec && (
+                  <div 
+                    className="absolute top-4 right-4 z-40 bg-[#0d121c]/95 backdrop-blur-xl border border-cyan-500/50 p-4 rounded-2xl shadow-2xl font-mono text-xs w-88 text-left pointer-events-auto animate-fadeIn"
+                  >
+                    {/* Header */}
+                    <div className="flex items-center justify-between border-b border-cyan-500/30 pb-2 mb-2.5">
+                      <div className="flex items-center space-x-2">
+                        <div className="p-1.5 bg-cyan-500/20 text-cyan-400 rounded-lg">
+                          <Cpu size={16} />
+                        </div>
+                        <div>
+                          <h4 className="text-white font-bold font-sans text-xs">{selectedSpec.title}</h4>
+                          <span className="text-[10px] text-cyan-400">{selectedSpec.category}</span>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => setSelectedSpec(null)}
+                        className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10 transition-colors cursor-pointer"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+
+                    {/* Circuit-Specific Role Description */}
+                    <div className="text-[11px] text-gray-200 font-sans leading-relaxed bg-black/40 p-2.5 rounded-lg border border-white/5 mb-2.5">
+                      {selectedSpec.role}
+                    </div>
+
+                    {/* Physical & Electrical Specifications */}
+                    <div className="space-y-1 text-[10.5px] bg-black/50 p-2.5 rounded-lg border border-white/10 mb-2">
+                      <div className="flex justify-between text-gray-400 border-b border-white/5 pb-1">
+                        <span>Material Composition:</span>
+                        <span className="text-emerald-400 font-bold">{selectedSpec.material}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-400 border-b border-white/5 py-1">
+                        <span>Geometry & Layer:</span>
+                        <span className="text-white font-bold">{selectedSpec.geometry}</span>
+                      </div>
+                      {Object.entries(selectedSpec.electrical).map(([k, v]) => (
+                        <div key={k} className="flex justify-between text-gray-400 border-b border-white/5 py-1">
+                          <span>{k}:</span>
+                          <span className="text-cyan-300 font-bold">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* DRC Rules */}
+                    <div className="text-[9.5px] text-gray-400 bg-cyan-950/40 p-1.5 rounded-lg border border-cyan-500/30 flex items-start space-x-1 font-sans">
+                      <CheckCircle2 size={12} className="text-cyan-400 flex-shrink-0 mt-0.5" />
+                      <span><strong className="text-cyan-300">DRC Rule:</strong> {selectedSpec.drcRule}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Bottom Overlay Info Banner */}
-            <div className="absolute bottom-4 left-4 right-4 bg-[#111620]/90 backdrop-blur-md border border-white/15 p-3 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs font-mono shadow-xl">
-              <div className="flex items-center space-x-3">
-                <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-                <span className="text-gray-200 font-bold">3nm FinFET / GAA-FET 3D Silicon Stack Cross-Section</span>
+            {/* Bottom Quick-Select Bar of Active Circuit Elements */}
+            <div className="absolute bottom-3 left-3 right-3 bg-[#111620]/95 backdrop-blur-md border border-white/15 p-2 rounded-xl flex items-center justify-between gap-2 overflow-x-auto text-[11px] font-mono shadow-2xl">
+              <div className="flex items-center space-x-2 text-cyan-400 px-2 flex-shrink-0 font-sans font-bold">
+                <Sparkles size={14} />
+                <span>{defaultData.circuitType || 'Circuit'} Components:</span>
               </div>
-              <div className="flex items-center space-x-4 text-gray-400 text-[11px]">
-                <span>• 3D TSV Microbumps (Top)</span>
-                <span>• Ultra-Thick Power Mesh (M7)</span>
-                <span>• Cu / Co Interconnects (M1-M6)</span>
-                <span>• High-K Metal Gates</span>
+              <div className="flex items-center space-x-1.5 overflow-x-auto flex-1">
+                {defaultData.layers.flatMap(l => l.features).map((feat, idx) => {
+                  const isSel = selectedSpec?.title === (feat.label || feat.type.toUpperCase());
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        const layer = defaultData.layers.find(l => l.features.includes(feat)) || defaultData.layers[0];
+                        handleSelectFeature(layer, feat);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+                        isSel 
+                          ? 'bg-cyan-500 text-black font-bold border-cyan-400 shadow' 
+                          : 'bg-black/40 text-gray-300 border-white/10 hover:bg-white/10'
+                      }`}
+                    >
+                      {feat.label || feat.type.toUpperCase()}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
         )}
 
-        {/* VIEW MODE 2: INTERACTIVE 3D CAD ORBITAL CANVAS */}
+        {/* VIEW MODE 2: INTERACTIVE 3D CAD ORBIT CANVAS WITH IN-DIAGRAM COMPONENT CALLOUTS */}
         {viewMode === 'cad' && (
           <div 
             className="flex-1 h-full flex items-center justify-center bg-[#131924]/80 border border-white/10 rounded-2xl shadow-2xl overflow-hidden relative cursor-grab active:cursor-grabbing"
@@ -417,25 +695,71 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
           >
-            {/* Top Clean Orbit Badge */}
-            <div className="absolute top-3 left-3 z-20 pointer-events-none text-xs text-gray-300 bg-black/75 px-3 py-1.5 rounded-lg border border-white/15 font-mono flex items-center space-x-2 backdrop-blur-sm shadow-md">
+            {/* Top Pitch & Yaw Angle Tracker Badge */}
+            <div className="absolute top-3 left-3 z-20 pointer-events-none text-xs text-gray-300 bg-black/80 px-3.5 py-1.5 rounded-lg border border-white/15 font-mono flex items-center space-x-3 backdrop-blur-sm shadow-md">
               <Compass size={14} className="text-cyan-400" />
-              <span>Click & Drag to Rotate Orbit</span>
+              <span>Drag to Rotate in 3D</span>
               <span className="text-cyan-400 font-bold">Pitch: {Math.round(rotX)}°</span>
               <span className="text-emerald-400 font-bold">Yaw: {Math.round(rotZ)}°</span>
             </div>
 
             {/* Hovered Feature Tooltip */}
-            {hoveredFeature && (
+            {hoveredLabel && (
               <div className="absolute bottom-3 left-3 z-20 pointer-events-none text-xs text-white bg-cyan-950/95 px-3 py-1.5 rounded-lg border border-cyan-500/40 font-mono backdrop-blur-sm shadow-lg flex items-center space-x-2">
                 <Zap size={14} className="text-cyan-400" />
-                <span>{hoveredFeature}</span>
+                <span>{hoveredLabel}</span>
+              </div>
+            )}
+
+            {/* IN-DIAGRAM FLOATING SPECIFICATION CARD FOR SELECTED CAD BLOCK */}
+            {selectedSpec && (
+              <div 
+                className="absolute top-14 right-4 z-40 bg-[#0d121c]/95 backdrop-blur-xl border border-amber-500/50 p-4 rounded-2xl shadow-2xl font-mono text-xs w-84 text-left pointer-events-auto animate-fadeIn"
+              >
+                <div className="flex items-center justify-between border-b border-amber-500/30 pb-2 mb-2.5">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg">
+                      <Zap size={15} />
+                    </div>
+                    <div>
+                      <h4 className="text-white font-bold font-sans text-xs">{selectedSpec.title}</h4>
+                      <span className="text-[10px] text-amber-400">{selectedSpec.category}</span>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedSpec(null)}
+                    className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-gray-200 font-sans leading-relaxed bg-black/40 p-2 rounded-lg border border-white/5 mb-2.5">
+                  {selectedSpec.role}
+                </p>
+
+                <div className="space-y-1 text-[10.5px] bg-black/50 p-2.5 rounded-lg border border-white/10">
+                  <div className="flex justify-between text-gray-400 border-b border-white/5 pb-1">
+                    <span>Material:</span>
+                    <span className="text-white font-bold">{selectedSpec.material}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-400 border-b border-white/5 py-1">
+                    <span>Geometry:</span>
+                    <span className="text-cyan-300 font-bold">{selectedSpec.geometry}</span>
+                  </div>
+                  {Object.entries(selectedSpec.electrical).map(([k, v]) => (
+                    <div key={k} className="flex justify-between text-gray-400 border-b border-white/5 py-1">
+                      <span>{k}:</span>
+                      <span className="text-amber-300 font-bold">{v}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
             {/* 3D Stack Container */}
             <div 
-              className="w-[400px] h-[300px] relative transition-transform duration-75 ease-out"
+              className="w-[420px] h-[300px] relative transition-transform duration-75 ease-out"
               style={{
                 transformStyle: 'preserve-3d',
                 transform: `rotateX(${rotX}deg) rotateZ(${rotZ}deg) scale(${zoom})`,
@@ -443,13 +767,16 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
             >
               {defaultData.layers.map((layer) => {
                 if (hiddenLayerIds[layer.id]) return null;
-                const isSelected = selectedLayer === layer.id;
+                const isSelected = selectedLayerId === layer.id;
                 const zVal = layer.altitude * explosionZ;
 
                 return (
                   <div
                     key={layer.id}
-                    onClick={(e) => { e.stopPropagation(); setSelectedLayer(layer.id); }}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setSelectedLayerId(layer.id); 
+                    }}
                     className={`absolute inset-0 rounded-2xl transition-all cursor-pointer border ${
                       isSelected 
                         ? 'border-cyan-400 bg-[#162032]/95 ring-2 ring-cyan-500/40 shadow-2xl shadow-cyan-500/25' 
@@ -481,8 +808,13 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
                       {layer.features.map((feat, idx) => (
                         <g 
                           key={idx}
-                          onMouseEnter={() => setHoveredFeature(`[${layer.name}] ${feat.label || feat.type.toUpperCase()}`)}
-                          onMouseLeave={() => setHoveredFeature(null)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSelectFeature(layer, feat);
+                          }}
+                          onMouseEnter={() => setHoveredLabel(`[${layer.name}] ${feat.label || feat.type.toUpperCase()}`)}
+                          onMouseLeave={() => setHoveredLabel(null)}
+                          className="cursor-pointer"
                         >
                           <rect
                             x={feat.x}
@@ -491,10 +823,10 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
                             height={feat.h}
                             rx={feat.type === 'pad' ? 10 : feat.type === 'fin' ? 4 : 3}
                             fill={`url(#grad-${layer.id})`}
-                            stroke={isSelected ? '#38bdf8' : '#ffffff'}
-                            strokeWidth={isSelected ? 1.8 : 0.8}
-                            strokeOpacity={0.8}
-                            className="transition-all hover:stroke-cyan-300 hover:fill-opacity-100"
+                            stroke={selectedSpec?.title === feat.label ? '#f59e0b' : isSelected ? '#38bdf8' : '#ffffff'}
+                            strokeWidth={selectedSpec?.title === feat.label ? 2.5 : isSelected ? 1.8 : 0.8}
+                            strokeOpacity={0.9}
+                            className="transition-all hover:stroke-amber-300 hover:fill-opacity-100"
                           />
                           {feat.label && (
                             <text
@@ -520,103 +852,23 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
           </div>
         )}
 
-        {/* Right Side Inspector & Physics Metrics */}
+        {/* RIGHT SIDE: SILICON STACK CHARACTERISTICS & BEOL LAYER LIST */}
         {!isFullscreen && (
-          <div className="w-full xl:w-96 flex flex-col space-y-3.5 text-xs font-sans overflow-y-auto max-h-full">
+          <div className="w-full xl:w-96 flex flex-col space-y-3.5 text-xs font-sans overflow-y-auto max-h-full flex-shrink-0">
             
-            {/* Silicon & BEOL Layers List */}
-            <div className="bg-[#131924] p-4 rounded-xl border border-white/10 space-y-3 flex-shrink-0">
-              <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
-                <div className="flex items-center space-x-2">
-                  <Layers size={15} className="text-cyan-400" />
-                  <h3 className="text-gray-100 font-bold text-xs">Silicon & BEOL Layers</h3>
-                </div>
-                <span className="text-[10px] text-gray-400 font-mono">{defaultData.layers.length} Active Levels</span>
-              </div>
-
-              <div className="space-y-2">
-                {defaultData.layers.slice().reverse().map((layer) => {
-                  const isSelected = selectedLayer === layer.id;
-                  const isHidden = hiddenLayerIds[layer.id];
-
-                  return (
-                    <div
-                      key={layer.id}
-                      onClick={() => setSelectedLayer(layer.id)}
-                      className={`w-full p-2.5 rounded-lg border transition-all flex items-center justify-between cursor-pointer font-mono text-[11px] ${
-                        isSelected 
-                          ? 'bg-cyan-500/15 border-cyan-400 text-white font-bold ring-1 ring-cyan-500/30' 
-                          : isHidden 
-                            ? 'bg-black/20 border-white/5 text-gray-600'
-                            : 'bg-black/40 border-white/10 text-gray-300 hover:bg-white/5'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2.5 truncate">
-                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: layer.color }} />
-                        <span className="truncate">{layer.name}</span>
-                      </div>
-
-                      <div className="flex items-center space-x-2 flex-shrink-0">
-                        <span className="text-[10px] text-gray-400 bg-white/5 px-1.5 py-0.5 rounded">
-                          {layer.thickness}nm
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleLayerVisibility(layer.id);
-                          }}
-                          className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10 transition-colors"
-                          title={isHidden ? 'Show Layer' : 'Hide Layer'}
-                        >
-                          {isHidden ? <EyeOff size={13} className="text-gray-600" /> : <Eye size={13} className="text-cyan-400" />}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Selected Layer Detailed Inspector */}
-            {selectedLayerData && (
-              <div className="bg-[#131924] p-4 rounded-xl border border-cyan-500/30 space-y-2.5 font-mono text-[11px] animate-fadeIn flex-shrink-0">
-                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
-                  <span className="text-cyan-300 font-bold flex items-center space-x-1.5">
-                    <Info size={13} />
-                    <span>Layer Details: {selectedLayerData.name}</span>
-                  </span>
-                  <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded">
-                    Level {selectedLayerData.level}
-                  </span>
-                </div>
-                <div className="flex justify-between text-gray-400">
-                  <span>Material:</span>
-                  <span className="text-white font-bold">{selectedLayerData.material}</span>
-                </div>
-                <div className="flex justify-between text-gray-400">
-                  <span>Physical Thickness:</span>
-                  <span className="text-cyan-300">{selectedLayerData.thickness} nm</span>
-                </div>
-                <div className="flex justify-between text-gray-400">
-                  <span>Sheet Resistance (Rs):</span>
-                  <span className="text-emerald-400 font-bold">{selectedLayerData.sheetRes}</span>
-                </div>
-                <div className="flex justify-between text-gray-400">
-                  <span>Features Count:</span>
-                  <span className="text-gray-200">{selectedLayerData.features.length} geometries</span>
-                </div>
-              </div>
-            )}
-
-            {/* Technology Physical Metrics Card */}
+            {/* Silicon Stack Metrics */}
             <div className="bg-[#131924] p-4 rounded-xl border border-white/10 space-y-2.5 font-mono text-[11px] flex-shrink-0">
               <h3 className="text-gray-200 font-bold font-sans text-xs border-b border-white/10 pb-2 flex items-center space-x-1.5">
                 <Zap size={14} className="text-cyan-400" />
-                <span>3D Silicon Characteristics</span>
+                <span>3D Silicon Stack Characteristics</span>
               </h3>
               <div className="flex justify-between text-gray-400">
+                <span>Circuit Logic Type:</span>
+                <span className="text-emerald-400 font-bold">{defaultData.circuitType || 'Standard Cell'}</span>
+              </div>
+              <div className="flex justify-between text-gray-400">
                 <span>Contacted Poly Pitch (CPP):</span>
-                <span className="text-emerald-400 font-bold">{defaultData.metrics.gatePitch}</span>
+                <span className="text-cyan-300 font-bold">{defaultData.metrics.gatePitch}</span>
               </div>
               <div className="flex justify-between text-gray-400">
                 <span>Metal 1 Track Pitch:</span>
@@ -630,9 +882,58 @@ export function ThreeDCircuitViewer({ data }: ThreeDCircuitViewerProps) {
                 <span>RC Interconnect Delay:</span>
                 <span className="text-purple-400 font-bold">{defaultData.metrics.interconnectDelay}</span>
               </div>
-              <div className="flex justify-between text-gray-400">
-                <span>Total Multilevel Height:</span>
-                <span className="text-gray-200">{defaultData.metrics.totalHeight}</span>
+            </div>
+
+            {/* Silicon & BEOL Layers List */}
+            <div className="bg-[#131924] p-3.5 rounded-xl border border-white/10 space-y-2 flex-shrink-0">
+              <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                <div className="flex items-center space-x-1.5">
+                  <Layers size={14} className="text-cyan-400" />
+                  <h4 className="text-gray-200 font-bold text-xs">BEOL Layer Stack</h4>
+                </div>
+                <span className="text-[10px] text-gray-500 font-mono">{defaultData.layers.length} Layers</span>
+              </div>
+
+              <div className="space-y-1.5">
+                {defaultData.layers.slice().reverse().map((layer) => {
+                  const isSelected = selectedLayerId === layer.id;
+                  const isHidden = hiddenLayerIds[layer.id];
+
+                  return (
+                    <div
+                      key={layer.id}
+                      onClick={() => setSelectedLayerId(layer.id)}
+                      className={`w-full p-2 rounded-lg border transition-all flex items-center justify-between cursor-pointer font-mono text-[11px] ${
+                        isSelected 
+                          ? 'bg-cyan-500/15 border-cyan-400 text-white font-bold' 
+                          : isHidden 
+                            ? 'bg-black/20 border-white/5 text-gray-600'
+                            : 'bg-black/40 border-white/10 text-gray-300 hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2 truncate">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: layer.color }} />
+                        <span className="truncate">{layer.name}</span>
+                      </div>
+
+                      <div className="flex items-center space-x-2 flex-shrink-0">
+                        <span className="text-[10px] text-gray-400 bg-white/5 px-1 py-0.5 rounded">
+                          {layer.thickness}nm
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleLayerVisibility(layer.id);
+                          }}
+                          className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10 transition-colors cursor-pointer"
+                          title={isHidden ? 'Show Layer' : 'Hide Layer'}
+                        >
+                          {isHidden ? <EyeOff size={12} className="text-gray-600" /> : <Eye size={12} className="text-cyan-400" />}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { CodeEditor } from './components/CodeEditor';
-import { DiagramViewer } from './components/DiagramViewer';
+import { LogicDiagramViewer } from './components/LogicDiagramViewer';
 import { WaveformViewer } from './components/WaveformViewer';
 import { TruthTableViewer } from './components/TruthTableViewer';
 import { VerificationReport } from './components/VerificationReport';
@@ -10,6 +10,7 @@ import { FloorplanViewer, FloorplanData } from './components/FloorplanViewer';
 import { PowerPlanViewer, PowerPlanData } from './components/PowerPlanViewer';
 import { CmosDesignViewer, CmosDesignData } from './components/CmosDesignViewer';
 import { ThreeDCircuitViewer, ThreeDChipData } from './components/ThreeDCircuitViewer';
+import { PinDiagramViewer, PinDiagramData } from './components/PinDiagramViewer';
 import { 
   Cpu, 
   Code2, 
@@ -37,11 +38,12 @@ import {
   generateFloorplanData,
   generatePowerPlanData,
   generateCmosDesignData,
-  generate3DChipData
+  generate3DChipData,
+  generatePinDiagramData
 } from './services/geminiService';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'rtl' | 'testbench' | 'truthtable' | 'cmos' | 'schematic' | 'threed' | 'floorplan' | 'powerplan' | 'waveform' | 'diagram' | 'verification' | 'architecture'>('rtl');
+  const [activeTab, setActiveTab] = useState<'rtl' | 'testbench' | 'truthtable' | 'pin' | 'cmos' | 'schematic' | 'threed' | 'floorplan' | 'powerplan' | 'waveform' | 'diagram' | 'verification' | 'architecture'>('rtl');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isTruthTablePanelOpen, setIsTruthTablePanelOpen] = useState(false);
   
@@ -57,6 +59,7 @@ export default function App() {
   const [powerPlanData, setPowerPlanData] = useState<PowerPlanData | null>(null);
   const [cmosData, setCmosData] = useState<CmosDesignData | null>(null);
   const [threeDData, setThreeDData] = useState<ThreeDChipData | null>(null);
+  const [pinDiagramData, setPinDiagramData] = useState<PinDiagramData | null>(null);
 
   const [isGeneratingRtl, setIsGeneratingRtl] = useState(false);
   const [isGeneratingTb, setIsGeneratingTb] = useState(false);
@@ -65,6 +68,7 @@ export default function App() {
   const [isGeneratingWaveform, setIsGeneratingWaveform] = useState(false);
   const [isGeneratingTruthTable, setIsGeneratingTruthTable] = useState(false);
   const [isDesigningChip, setIsDesigningChip] = useState(false);
+  const [isGeneratingPin, setIsGeneratingPin] = useState(false);
 
   const handleGenerateRtl = async (description: string) => {
     setIsGeneratingRtl(true);
@@ -90,6 +94,7 @@ export default function App() {
         generatePowerPlanData(code).then((pp) => pp && setPowerPlanData(pp));
         generateCmosDesignData(code).then((cm) => cm && setCmosData(cm));
         generate3DChipData(code).then((td) => td && setThreeDData(td));
+        generatePinDiagramData(code).then((pd) => pd && setPinDiagramData(pd));
       }
     } catch (e) {
       console.error(e);
@@ -98,16 +103,47 @@ export default function App() {
     }
   };
 
+  // Synchronize 3D, CMOS, Schematic, Pin Diagram, Logic Diagram, and Truth Table views whenever RTL code changes
+  React.useEffect(() => {
+    if (rtlCode && !rtlCode.startsWith('//')) {
+      generate3DChipData(rtlCode).then(td => td && setThreeDData(td));
+      generateTruthTable(rtlCode).then(tt => tt && setTruthTableData(tt));
+      generateCmosDesignData(rtlCode).then(cm => cm && setCmosData(cm));
+      generateSchematicData(rtlCode).then(sch => sch && setSchematicData(sch));
+      generateFloorplanData(rtlCode).then(fp => fp && setFloorplanData(fp));
+      generatePowerPlanData(rtlCode).then(pp => pp && setPowerPlanData(pp));
+      generatePinDiagramData(rtlCode).then(pd => pd && setPinDiagramData(pd));
+      generateDiagram(rtlCode).then(diag => diag && setDiagramData(diag));
+    }
+  }, [rtlCode]);
+
   const handleSelectTab = (tab: typeof activeTab) => {
     setActiveTab(tab);
-    if (tab === 'truthtable' && !truthTableData && rtlCode && !rtlCode.startsWith('//')) {
-      generateTruthTable(rtlCode).then(tt => tt && setTruthTableData(tt));
-    }
-    if (tab === 'cmos' && !cmosData && rtlCode && !rtlCode.startsWith('//')) {
-      generateCmosDesignData(rtlCode).then(cm => cm && setCmosData(cm));
-    }
-    if (tab === 'threed' && !threeDData && rtlCode && !rtlCode.startsWith('//')) {
-      generate3DChipData(rtlCode).then(td => td && setThreeDData(td));
+    if (rtlCode && !rtlCode.startsWith('//')) {
+      if (tab === 'diagram') {
+        generateDiagram(rtlCode).then(diag => diag && setDiagramData(diag));
+      }
+      if (tab === 'truthtable') {
+        generateTruthTable(rtlCode).then(tt => tt && setTruthTableData(tt));
+      }
+      if (tab === 'pin') {
+        generatePinDiagramData(rtlCode).then(pd => pd && setPinDiagramData(pd));
+      }
+      if (tab === 'cmos') {
+        generateCmosDesignData(rtlCode).then(cm => cm && setCmosData(cm));
+      }
+      if (tab === 'threed') {
+        generate3DChipData(rtlCode).then(td => td && setThreeDData(td));
+      }
+      if (tab === 'schematic') {
+        generateSchematicData(rtlCode).then(sch => sch && setSchematicData(sch));
+      }
+      if (tab === 'floorplan') {
+        generateFloorplanData(rtlCode).then(fp => fp && setFloorplanData(fp));
+      }
+      if (tab === 'powerplan') {
+        generatePowerPlanData(rtlCode).then(pp => pp && setPowerPlanData(pp));
+      }
     }
     if (tab === 'verification' && (!verificationReport || verificationReport === 'No report generated yet.') && rtlCode && !rtlCode.startsWith('//')) {
       handleVerifyRtl();
@@ -115,16 +151,24 @@ export default function App() {
     if (tab === 'architecture' && (!architectureDoc || architectureDoc === 'No architecture designed yet.')) {
       handleDesignChip(rtlCode.startsWith('//') ? 'Microarchitecture Specification' : rtlCode);
     }
-    if (tab === 'schematic' && !schematicData && rtlCode && !rtlCode.startsWith('//')) {
-      generateSchematicData(rtlCode).then(sch => sch && setSchematicData(sch));
-    }
-    if (tab === 'floorplan' && !floorplanData && rtlCode && !rtlCode.startsWith('//')) {
-      generateFloorplanData(rtlCode).then(fp => fp && setFloorplanData(fp));
-    }
-    if (tab === 'powerplan' && !powerPlanData && rtlCode && !rtlCode.startsWith('//')) {
-      generatePowerPlanData(rtlCode).then(pp => pp && setPowerPlanData(pp));
+  };
+
+  const handleGeneratePinDiagram = async () => {
+    if (!rtlCode || rtlCode.startsWith('//')) return;
+    setIsGeneratingPin(true);
+    try {
+      const data = await generatePinDiagramData(rtlCode);
+      if (data) {
+        setPinDiagramData(data);
+        setActiveTab('pin');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingPin(false);
     }
   };
+
 
   const handleGenerateTestbench = async () => {
     if (!rtlCode || rtlCode.startsWith('//')) return;
@@ -285,6 +329,12 @@ export default function App() {
                 label="Truth Table"
               />
               <TabButton 
+                active={activeTab === 'pin'} 
+                onClick={() => handleSelectTab('pin')}
+                icon={<Cpu size={15} className="text-emerald-400" />}
+                label="Pin Diagram"
+              />
+              <TabButton 
                 active={activeTab === 'cmos'} 
                 onClick={() => handleSelectTab('cmos')}
                 icon={<Cpu size={15} className="text-purple-400" />}
@@ -349,6 +399,11 @@ export default function App() {
           
           <div className="flex space-x-1.5 min-w-max ml-4">
             <ActionButton 
+              onClick={handleGeneratePinDiagram} 
+              loading={isGeneratingPin}
+              label="Pin Diagram"
+            />
+            <ActionButton 
               onClick={handleGenerateTestbench} 
               loading={isGeneratingTb}
               label="TB"
@@ -392,6 +447,13 @@ export default function App() {
             {activeTab === 'truthtable' && (
               <TruthTableViewer data={truthTableData} />
             )}
+            {activeTab === 'pin' && (
+              <PinDiagramViewer 
+                data={pinDiagramData} 
+                onGenerate={handleGeneratePinDiagram}
+                isGenerating={isGeneratingPin}
+              />
+            )}
             {activeTab === 'cmos' && (
               <CmosDesignViewer data={cmosData} />
             )}
@@ -402,10 +464,22 @@ export default function App() {
               <ThreeDCircuitViewer data={threeDData} />
             )}
             {activeTab === 'floorplan' && (
-              <FloorplanViewer data={floorplanData} />
+              <FloorplanViewer 
+                config={floorplanData as any} 
+                onChangeConfig={(cfg) => setFloorplanData(cfg as any)}
+                onResetToRtl={() => {
+                  if (rtlCode && !rtlCode.startsWith('//')) {
+                    generateFloorplanData(rtlCode).then(fp => fp && setFloorplanData(fp));
+                  }
+                }}
+              />
             )}
             {activeTab === 'powerplan' && (
-              <PowerPlanViewer data={powerPlanData} />
+              <PowerPlanViewer 
+                floorplan={floorplanData as any} 
+                powerPlan={powerPlanData as any} 
+                onChangePowerPlan={(newPlan) => setPowerPlanData(newPlan as any)}
+              />
             )}
             {activeTab === 'testbench' && (
               <CodeEditor code={testbenchCode} onChange={setTestbenchCode} language="systemverilog" />
@@ -414,7 +488,11 @@ export default function App() {
               <VerificationReport report={verificationReport} />
             )}
             {activeTab === 'diagram' && (
-              <DiagramViewer data={diagramData} />
+              <LogicDiagramViewer 
+                data={diagramData} 
+                onGenerate={handleGenerateDiagram}
+                isGenerating={isGeneratingDiagram}
+              />
             )}
             {activeTab === 'waveform' && (
               <WaveformViewer data={waveformData} />
