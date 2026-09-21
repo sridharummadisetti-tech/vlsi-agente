@@ -1,5 +1,5 @@
 {
-  "name": "Remix: VLSI AI Assistant",
-  "description": "AI-powered RTL code generation, verification, and visualization tool for VLSI students.",
+  "name": "VLSI Studio",
+  "description": "Autonomous AI-powered ASIC/SoC design, RTL generation, physical floorplanning, PDN power planning, and verification studio.",
   "requestFramePermissions": []
 }
