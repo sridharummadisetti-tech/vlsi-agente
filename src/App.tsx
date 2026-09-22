@@ -275,24 +275,18 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-[#151619] text-gray-200 font-sans overflow-hidden">
-      {/* Sidebar - Desktop */}
-      <div className="hidden md:block w-80 h-full shrink-0 border-r border-white/10">
-        <Sidebar 
-          onGenerateRtl={handleGenerateRtl} 
-          isGenerating={isGeneratingRtl} 
-          onDesignChip={handleDesignChip}
-          isDesigning={isDesigningChip}
-        />
-      </div>
-
-      {/* Sidebar - Mobile */}
+      {/* Slide-over Drawer (Only visible when toggled open) */}
       {isSidebarOpen && (
-        <div className="fixed inset-0 z-50 flex md:hidden">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setIsSidebarOpen(false)} />
-          <div className="relative w-80 max-w-[85vw] h-full bg-[#151619] flex flex-col shadow-2xl">
+        <div className="fixed inset-0 z-50 flex animate-fadeIn">
+          <div 
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity" 
+            onClick={() => setIsSidebarOpen(false)} 
+          />
+          <div className="relative w-80 max-w-[85vw] h-full bg-[#151619] flex flex-col shadow-2xl z-10 border-r border-white/10">
             <button 
               onClick={() => setIsSidebarOpen(false)}
-              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-white z-10 bg-black/20 rounded-md"
+              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-white z-10 bg-black/30 hover:bg-black/50 rounded-md transition-colors"
+              title="Close Panel"
             >
               <X size={18} />
             </button>
@@ -312,10 +306,11 @@ export default function App() {
         <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-[#151619] overflow-x-auto">
           <div className="flex items-center min-w-max">
             <button 
-              className="md:hidden p-1.5 text-gray-400 hover:text-gray-200 bg-white/5 rounded-md border border-white/10 mr-3" 
+              className="p-1.5 text-gray-400 hover:text-gray-200 bg-white/5 hover:bg-white/10 rounded-md border border-white/10 mr-3 transition-colors flex items-center space-x-1.5" 
               onClick={() => setIsSidebarOpen(true)}
+              title="Open Quick Generator Drawer"
             >
-              <Menu size={18} />
+              <Menu size={16} className="text-emerald-400" />
             </button>
             <div className="flex space-x-1">
               <TabButton 
