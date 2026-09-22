@@ -302,144 +302,146 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full bg-[#1A1C20] min-w-0">
-        {/* Header / Tabs */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-[#151619] overflow-x-auto">
-          <div className="flex items-center min-w-max">
-            <button 
-              className="p-1.5 text-gray-400 hover:text-gray-200 bg-white/5 hover:bg-white/10 rounded-md border border-white/10 mr-3 transition-colors flex items-center space-x-1.5" 
-              onClick={() => setIsSidebarOpen(true)}
-              title="Open Quick Generator Drawer"
-            >
-              <Menu size={16} className="text-emerald-400" />
-            </button>
-            <div className="flex space-x-1">
-              <TabButton 
-                active={activeTab === 'chat'} 
-                onClick={() => handleSelectTab('chat')}
-                icon={<Sparkles size={15} className="text-emerald-400" />}
-                label="AI Chat"
-              />
-              <TabButton 
-                active={activeTab === 'rtl'} 
-                onClick={() => handleSelectTab('rtl')}
-                icon={<Code2 size={15} />}
-                label="RTL Code"
-              />
-              <TabButton 
-                active={activeTab === 'truthtable'} 
-                onClick={() => handleSelectTab('truthtable')}
-                icon={<Table size={15} className="text-emerald-400" />}
-                label="Truth Table"
-              />
-              <TabButton 
-                active={activeTab === 'pin'} 
-                onClick={() => handleSelectTab('pin')}
-                icon={<Cpu size={15} className="text-emerald-400" />}
+        {/* Header / Tabs - Only visible when in VLSI Studio Workspace (not in full-screen AI Chat) */}
+        {activeTab !== 'chat' && (
+          <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-[#151619] overflow-x-auto">
+            <div className="flex items-center min-w-max">
+              <button 
+                className="p-1.5 text-gray-400 hover:text-gray-200 bg-white/5 hover:bg-white/10 rounded-md border border-white/10 mr-3 transition-colors flex items-center space-x-1.5" 
+                onClick={() => setIsSidebarOpen(true)}
+                title="Open Quick Generator Drawer"
+              >
+                <Menu size={16} className="text-emerald-400" />
+              </button>
+              <div className="flex space-x-1">
+                <TabButton 
+                  active={activeTab === 'chat'} 
+                  onClick={() => handleSelectTab('chat')}
+                  icon={<Sparkles size={15} className="text-emerald-400" />}
+                  label="AI Chat"
+                />
+                <TabButton 
+                  active={activeTab === 'rtl'} 
+                  onClick={() => handleSelectTab('rtl')}
+                  icon={<Code2 size={15} />}
+                  label="RTL Code"
+                />
+                <TabButton 
+                  active={activeTab === 'truthtable'} 
+                  onClick={() => handleSelectTab('truthtable')}
+                  icon={<Table size={15} className="text-emerald-400" />}
+                  label="Truth Table"
+                />
+                <TabButton 
+                  active={activeTab === 'pin'} 
+                  onClick={() => handleSelectTab('pin')}
+                  icon={<Cpu size={15} className="text-emerald-400" />}
+                  label="Pin Diagram"
+                />
+                <TabButton 
+                  active={activeTab === 'cmos'} 
+                  onClick={() => handleSelectTab('cmos')}
+                  icon={<Cpu size={15} className="text-purple-400" />}
+                  label="CMOS Transistors"
+                />
+                <TabButton 
+                  active={activeTab === 'schematic'} 
+                  onClick={() => handleSelectTab('schematic')}
+                  icon={<Zap size={15} className="text-emerald-400" />}
+                  label="Schematic"
+                />
+                <TabButton 
+                  active={activeTab === 'threed'} 
+                  onClick={() => handleSelectTab('threed')}
+                  icon={<Box size={15} className="text-cyan-400" />}
+                  label="3D Silicon Stack"
+                />
+                <TabButton 
+                  active={activeTab === 'floorplan'} 
+                  onClick={() => handleSelectTab('floorplan')}
+                  icon={<Box size={15} className="text-blue-400" />}
+                  label="Floorplan"
+                />
+                <TabButton 
+                  active={activeTab === 'powerplan'} 
+                  onClick={() => handleSelectTab('powerplan')}
+                  icon={<Flame size={15} className="text-amber-400" />}
+                  label="Power Plan"
+                />
+                <TabButton 
+                  active={activeTab === 'waveform'} 
+                  onClick={() => handleSelectTab('waveform')}
+                  icon={<Activity size={15} />}
+                  label="Waveform"
+                />
+                <TabButton 
+                  active={activeTab === 'diagram'} 
+                  onClick={() => handleSelectTab('diagram')}
+                  icon={<Network size={15} />}
+                  label="Block Diagram"
+                />
+                <TabButton 
+                  active={activeTab === 'testbench'} 
+                  onClick={() => handleSelectTab('testbench')}
+                  icon={<Cpu size={15} />}
+                  label="Testbench"
+                />
+                <TabButton 
+                  active={activeTab === 'verification'} 
+                  onClick={() => handleSelectTab('verification')}
+                  icon={<FileCheck2 size={15} />}
+                  label="Verification"
+                />
+                <TabButton 
+                  active={activeTab === 'architecture'} 
+                  onClick={() => handleSelectTab('architecture')}
+                  icon={<Layers size={15} />}
+                  label="Architecture"
+                />
+              </div>
+            </div>
+            
+            <div className="flex space-x-1.5 min-w-max ml-4">
+              <ActionButton 
+                onClick={handleGeneratePinDiagram} 
+                loading={isGeneratingPin}
                 label="Pin Diagram"
               />
-              <TabButton 
-                active={activeTab === 'cmos'} 
-                onClick={() => handleSelectTab('cmos')}
-                icon={<Cpu size={15} className="text-purple-400" />}
-                label="CMOS Transistors"
+              <ActionButton 
+                onClick={handleGenerateTestbench} 
+                loading={isGeneratingTb}
+                label="TB"
               />
-              <TabButton 
-                active={activeTab === 'schematic'} 
-                onClick={() => handleSelectTab('schematic')}
-                icon={<Zap size={15} className="text-emerald-400" />}
-                label="Schematic"
+              <ActionButton 
+                onClick={handleVerifyRtl} 
+                loading={isVerifying}
+                label="Verify"
               />
-              <TabButton 
-                active={activeTab === 'threed'} 
-                onClick={() => handleSelectTab('threed')}
-                icon={<Box size={15} className="text-cyan-400" />}
-                label="3D Silicon Stack"
+              <ActionButton 
+                onClick={handleGenerateDiagram} 
+                loading={isGeneratingDiagram}
+                label="Diagram"
               />
-              <TabButton 
-                active={activeTab === 'floorplan'} 
-                onClick={() => handleSelectTab('floorplan')}
-                icon={<Box size={15} className="text-blue-400" />}
-                label="Floorplan"
+              <ActionButton 
+                onClick={handleGenerateTruthTable} 
+                loading={isGeneratingTruthTable}
+                label="Truth Table"
               />
-              <TabButton 
-                active={activeTab === 'powerplan'} 
-                onClick={() => handleSelectTab('powerplan')}
-                icon={<Flame size={15} className="text-amber-400" />}
-                label="Power Plan"
-              />
-              <TabButton 
-                active={activeTab === 'waveform'} 
-                onClick={() => handleSelectTab('waveform')}
-                icon={<Activity size={15} />}
+              <ActionButton 
+                onClick={handleGenerateWaveform} 
+                loading={isGeneratingWaveform}
                 label="Waveform"
               />
-              <TabButton 
-                active={activeTab === 'diagram'} 
-                onClick={() => handleSelectTab('diagram')}
-                icon={<Network size={15} />}
-                label="Block Diagram"
-              />
-              <TabButton 
-                active={activeTab === 'testbench'} 
-                onClick={() => handleSelectTab('testbench')}
-                icon={<Cpu size={15} />}
-                label="Testbench"
-              />
-              <TabButton 
-                active={activeTab === 'verification'} 
-                onClick={() => handleSelectTab('verification')}
-                icon={<FileCheck2 size={15} />}
-                label="Verification"
-              />
-              <TabButton 
-                active={activeTab === 'architecture'} 
-                onClick={() => handleSelectTab('architecture')}
-                icon={<Layers size={15} />}
-                label="Architecture"
-              />
+              <button
+                onClick={() => setIsTruthTablePanelOpen(!isTruthTablePanelOpen)}
+                className={`p-1.5 rounded-md border transition-colors flex items-center justify-center cursor-pointer ${isTruthTablePanelOpen ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/5 text-gray-400 hover:text-gray-200 border-white/10'}`}
+                title="Toggle Truth Table Panel"
+              >
+                <Table size={16} />
+              </button>
             </div>
           </div>
-          
-          <div className="flex space-x-1.5 min-w-max ml-4">
-            <ActionButton 
-              onClick={handleGeneratePinDiagram} 
-              loading={isGeneratingPin}
-              label="Pin Diagram"
-            />
-            <ActionButton 
-              onClick={handleGenerateTestbench} 
-              loading={isGeneratingTb}
-              label="TB"
-            />
-            <ActionButton 
-              onClick={handleVerifyRtl} 
-              loading={isVerifying}
-              label="Verify"
-            />
-            <ActionButton 
-              onClick={handleGenerateDiagram} 
-              loading={isGeneratingDiagram}
-              label="Diagram"
-            />
-            <ActionButton 
-              onClick={handleGenerateTruthTable} 
-              loading={isGeneratingTruthTable}
-              label="Truth Table"
-            />
-            <ActionButton 
-              onClick={handleGenerateWaveform} 
-              loading={isGeneratingWaveform}
-              label="Waveform"
-            />
-            <button
-              onClick={() => setIsTruthTablePanelOpen(!isTruthTablePanelOpen)}
-              className={`p-1.5 rounded-md border transition-colors flex items-center justify-center cursor-pointer ${isTruthTablePanelOpen ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/5 text-gray-400 hover:text-gray-200 border-white/10'}`}
-              title="Toggle Truth Table Panel"
-            >
-              <Table size={16} />
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Content Area */}
         <div className="flex-1 overflow-hidden relative flex">
