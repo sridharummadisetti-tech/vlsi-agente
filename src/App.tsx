@@ -11,6 +11,7 @@ import { PowerPlanViewer, PowerPlanData } from './components/PowerPlanViewer';
 import { CmosDesignViewer, CmosDesignData } from './components/CmosDesignViewer';
 import { ThreeDCircuitViewer, ThreeDChipData } from './components/ThreeDCircuitViewer';
 import { PinDiagramViewer, PinDiagramData } from './components/PinDiagramViewer';
+import { ChatInterface } from './components/ChatInterface';
 import { 
   Cpu, 
   Code2, 
@@ -24,7 +25,8 @@ import {
   Zap, 
   Box, 
   Flame, 
-  ShieldCheck 
+  ShieldCheck,
+  Sparkles
 } from 'lucide-react';
 import { 
   generateRtl, 
@@ -43,7 +45,7 @@ import {
 } from './services/geminiService';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'rtl' | 'testbench' | 'truthtable' | 'pin' | 'cmos' | 'schematic' | 'threed' | 'floorplan' | 'powerplan' | 'waveform' | 'diagram' | 'verification' | 'architecture'>('rtl');
+  const [activeTab, setActiveTab] = useState<'chat' | 'rtl' | 'testbench' | 'truthtable' | 'pin' | 'cmos' | 'schematic' | 'threed' | 'floorplan' | 'powerplan' | 'waveform' | 'diagram' | 'verification' | 'architecture'>('chat');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isTruthTablePanelOpen, setIsTruthTablePanelOpen] = useState(false);
   
@@ -317,6 +319,12 @@ export default function App() {
             </button>
             <div className="flex space-x-1">
               <TabButton 
+                active={activeTab === 'chat'} 
+                onClick={() => handleSelectTab('chat')}
+                icon={<Sparkles size={15} className="text-emerald-400" />}
+                label="AI Chat"
+              />
+              <TabButton 
                 active={activeTab === 'rtl'} 
                 onClick={() => handleSelectTab('rtl')}
                 icon={<Code2 size={15} />}
@@ -441,6 +449,33 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 overflow-hidden relative flex">
           <div className="flex-1 overflow-hidden relative">
+            {activeTab === 'chat' && (
+              <ChatInterface 
+                onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+                onNavigateToTab={(tabId) => {
+                  if (tabId === 'icExplorer' || tabId === 'specs') {
+                    handleSelectTab('pin');
+                  } else if (tabId === 'logicalVerification') {
+                    handleSelectTab('truthtable');
+                  } else if (tabId === 'cmosTransistor') {
+                    handleSelectTab('cmos');
+                  } else if (tabId === 'dftVerification') {
+                    handleSelectTab('verification');
+                  } else {
+                    handleSelectTab(tabId as any);
+                  }
+                }}
+                onOpenStudio={() => handleSelectTab('rtl')}
+                onLoadRtlCode={(code) => {
+                  setRtlCode(code);
+                  handleSelectTab('rtl');
+                }}
+                currentRtlCode={rtlCode}
+                onSelectComponent={(comp) => {
+                  handleGenerateRtl(comp);
+                }}
+              />
+            )}
             {activeTab === 'rtl' && (
               <CodeEditor code={rtlCode} onChange={setRtlCode} language="verilog" />
             )}
