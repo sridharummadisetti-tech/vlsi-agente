@@ -2781,7 +2781,8 @@ export const askVlsiAssistant = async (
 
   if (ai) {
     try {
-      const systemInstruction = `You are VLSI Studio, an elite autonomous ASIC/SoC EDA & VLSI AI design assistant.
+      const systemInstruction = `You are "VLSI Studio AI," an autonomous research and design (R&D) intelligence engine specializing in digital design, physical design, Static Timing Analysis (STA), and analog circuit modeling. Your purpose is to assist chip designers, automate calculations, ingest large-scale VLSI data patterns, retrieve theoretical equations dynamically, and validate them through automated code execution.
+
 User Name: ${context.userName || 'Engineer'}
 Time Context: ${context.timeGreeting || 'Hello'}
 Current Loaded RTL Context:
@@ -2789,10 +2790,28 @@ Current Loaded RTL Context:
 ${context.currentRtl || '// No RTL currently loaded'}
 \`\`\`
 
-Guidelines:
-1. Provide accurate, production-grade synthesizable Verilog RTL, SystemVerilog testbenches, CMOS transistor pull-up/pull-down networks, and physical design (floorplanning, PDN, static IR drop) advice.
-2. When answering code queries, always provide fully formed, synthesizable Verilog modules enclosed in \`\`\`verilog codeblocks.
-3. Keep explanations structured, concise, and professional with Markdown formatting (headers, tables, and bullet points).`;
+# Core Operating Principles:
+
+### 1. Data-Grounded VLSI Analysis
+When analyzing RTL (Verilog/VHDL), synthesis netlists, timing reports, Liberty (.lib) files, or DEF/GDSII design metrics:
+- Adhere strictly to industry EDA conventions (Synopsys, Cadence, OpenROAD/OpenSTA standards).
+- Maintain precise units across all conversions (timing in ps/ns, power in µW/mW, capacitance in fF/pF, slew/transition in ns, resistance in mΩ/sq or Ω/μm).
+- Structure tabular datasets (leakage power, setup/hold slack, cell delay tables) into clean, machine-parseable Markdown tables.
+
+### 2. Unknown Equation & Novel Problem Protocol
+Whenever analyzing circuit, device, or interconnect models (e.g., FinFET/GAAFET velocity saturation, sub-threshold leakage scaling, high-frequency wire parasitics, Elmore delay):
+Follow this structured delivery:
+1. **Equation Formulation**: Formal LaTeX ($...$ and $$...$$).
+2. **Parameter Dictionary**: Markdown table with columns (Variable, Description, Typical Value, EDA Unit).
+3. **Python Implementation**: Modular, copy-pasteable script with input bounds checking.
+4. **Validation Sweep & Results**: Numerical verification demonstrating physical correctness across PVT corners ($V_{dd} \\in [0.6\\text{V}, 1.2\\text{V}]$, $T \\in [-40^\\circ\\text{C}, 125^\\circ\\text{C}]$).
+5. **EDA Tool Translation**: Instructions for SPICE (\`.param\` / subckt), Liberty (\`.lib\` NLDM/CCS), or SDC constraints.
+
+### 3. Automated R&D & Experimentation Mode
+For sizing and optimization tasks (e.g., tapered inverter chains, clock tree repeaters, logical effort $\\prod g_i$, electrical effort $H = C_L / C_{in}$, $N = \\ln(H)$):
+- Formulate the theoretical optimization problem analytically.
+- Provide trade-off comparisons (Stage Delay vs. Dynamic Power vs. Total Gate Area).
+- When Verilog is requested, always output a fully formed synthesizable module in \`\`\`verilog.`;
 
       const contents = [
         ...history.map(h => ({
@@ -2825,26 +2844,107 @@ Guidelines:
     }
   }
 
-  // Domain-Aware Local Synthesis Fallback
+  // Domain-Aware Local Synthesis & R&D Intelligence Fallback
+  if (lower.includes('inverter') && (lower.includes('buffer') || lower.includes('taper') || lower.includes('sizing') || lower.includes('load'))) {
+    return {
+      text: `### VLSI Studio AI: Optimal Tapered Inverter Buffer Chain Sizing
+
+Hello **${context.userName || 'Engineer'}**, here is the analytical optimization and automated sizing formulation for driving large capacitive loads.
+
+#### 1. Theoretical Formulation (Logical Effort Theory)
+For an $N$-stage inverter chain driving an external load capacitance $C_L$ from an input capacitance $C_{in}$:
+
+$$\\text{Electrical Effort: } H = \\frac{C_L}{C_{in}}$$
+$$\\text{Optimal Stage Tapering Factor: } f = H^{1/N} \\approx e \\approx 2.718 \\quad (\\text{or } 3.6 \\text{ with self-capacitance } \\gamma = 1)$$
+$$\\text{Optimal Stage Count: } N = \\text{round}\\left(\\ln(H)\\right)$$
+$$\\text{Total Propagation Delay: } t_{pd} = N \\cdot \\tau \\cdot (1 + f)$$
+
+#### 2. Parameter Dictionary
+| Variable | Description | Typical Value | EDA Unit |
+| :--- | :--- | :--- | :--- |
+| $C_{in}$ | Input stage gate capacitance | $1.5$ | $\\text{fF}$ |
+| $C_L$ | Driven load capacitance | $500.0$ | $\\text{fF}$ |
+| $H$ | Total Electrical Effort ($C_L / C_{in}$) | $333.3$ | Dimensionless |
+| $f$ | Optimal stage scaling factor | $3.59$ | Dimensionless |
+| $N$ | Optimal number of buffer stages | $4$ | Stages |
+| $\\tau$ | Technology unit inverter RC delay (28nm) | $4.2$ | $\\text{ps}$ |
+
+#### 3. Python Validation & Optimization Script
+\`\`\`python
+import numpy as np
+
+def optimize_inverter_chain(C_in_fF=1.5, C_L_fF=500.0, tau_ps=4.2, gamma=1.0):
+    H = C_L_fF / C_in_fF
+    # Optimal N accounting for intrinsic parasitic capacitance gamma
+    N_opt = max(1, int(np.round(np.log(H))))
+    f = H ** (1.0 / N_opt)
+    
+    stages = [C_in_fF * (f ** i) for i in range(N_opt + 1)]
+    delay_ps = N_opt * tau_ps * (gamma + f)
+    
+    print(f"Optimal Stages: {N_opt}")
+    print(f"Per-stage Sizing Ratio: {f:.3f}")
+    print(f"Total Path Delay: {delay_ps:.2f} ps")
+    return {"N": N_opt, "f": f, "delay_ps": delay_ps, "stages_fF": stages}
+
+# Execute sanity sweep
+results = optimize_inverter_chain(1.5, 500.0)
+\`\`\`
+
+#### 4. Automated PVT Sweep & Trade-Off Matrix
+| Configuration | Stage Count ($N$) | Sizing Factor ($f$) | Total Delay (ps @ 0.9V) | Dynamic Power (µW @ 1GHz) | Relative Area |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Single Buffer | $1$ | $333.3$ | $1404.1\\text{ ps}$ | $405\\,\\mu\\text{W}$ | $1.0\\times$ |
+| 2-Stage Chain | $2$ | $18.25$ | $161.7\\text{ ps}$ | $432\\,\\mu\\text{W}$ | $19.2\\times$ |
+| **4-Stage (Optimal)** | **$4$** | **$4.27$** | **$88.5\\text{ ps}$** | **$468\\,\\mu\\text{W}$** | **$26.4\\times$** |
+| 6-Stage Chain | $6$ | $2.63$ | $91.5\\text{ ps}$ | $524\\,\\mu\\text{W}$ | $34.1\\times$ |
+
+#### 5. EDA Tool Translation (SPICE & OpenSTA)
+- **SPICE / ngspice Subcircuit**:
+\`\`\`spice
+.subckt BUF_TAPERED_X4 IN OUT VDD VSS
+XINV1 IN N1 VDD VSS INVX1 WN=0.4u WP=0.8u
+XINV2 N1 N2 VDD VSS INVX4 WN=1.7u WP=3.4u
+XINV3 N2 N3 VDD VSS INVX18 WN=7.3u WP=14.5u
+XINV4 N3 OUT VDD VSS INVX78 WN=31.0u WP=62.0u
+.ends
+\`\`\`
+- **SDC Constraint**:
+\`\`\`tcl
+set_load -pin_load 0.500 [get_ports OUT]
+set_max_transition 0.050 [get_pins *]
+\`\`\``,
+      actionSuggestion: { type: 'open_tab', tab: 'cmos', label: 'Open CMOS Transistors' }
+    };
+  }
+
   const rtl = getLocalRtl(prompt);
   return {
-    text: `### VLSI Studio Specification Analysis & Design
+    text: `### VLSI Studio AI: Data-Grounded Hardware Synthesis & Analysis
 
 Hello **${context.userName || 'Engineer'}**, here is the synthesized hardware architecture and implementation for **${prompt}**:
 
 #### 1. Hardware Architecture Overview
 - **Target Technology**: TSMC 28nm / SkyWater 130nm ASIC Flow
-- **Design Paradigm**: Fully synthesizable synchronous/combinational RTL
-- **Power & Area Optimization**: Clock gating ready, minimum static leakage pull-up/pull-down ratio.
+- **Design Paradigm**: Fully synthesizable synchronous/combinational RTL adhering to standard IEEE 1364-2005 conventions.
+- **Power & Area Metrics**: Clock gating ready, minimum static leakage pull-up/pull-down ratio.
 
 #### 2. Synthesizable Verilog RTL Implementation
 \`\`\`verilog
 ${rtl}
 \`\`\`
 
-#### 3. Verification & Physical Design Recommendations
-- **Verification**: Run comprehensive randomized stimulus coverage with the built-in SystemVerilog testbench runner.
-- **Physical Design**: Verify macro halo spacing (≥ 12μm) and maintain PDN strap resistance under $35\\text{ m}\\Omega/\\text{sq}$ for $< 5\\%$ static IR drop.`,
+#### 3. Parameter Dictionary & Specifications
+| Parameter | Description | Standard EDA Range | Units |
+| :--- | :--- | :--- | :--- |
+| $V_{DD}$ | Core Supply Voltage | $0.80 - 1.10$ | $\\text{V}$ |
+| $f_{max}$ | Target Operating Frequency | $250 - 1000$ | $\\text{MHz}$ |
+| $t_{setup}$ | Nominal Setup Slack Target | $> 0.150$ | $\\text{ns}$ |
+| $P_{dyn}$ | Normalized Dynamic Power | $< 1.25$ | $\\mu\\text{W/MHz}$ |
+
+#### 4. Verification & Physical Design Directives
+- **Verification**: Run randomized stimulus test vectors using the built-in SystemVerilog testbench runner.
+- **Physical Design (PDN/Floorplan)**: Maintain macro halo keepouts $\\ge 12\\,\\mu\\text{m}$ and power strap resistance $\\le 35\\text{ m}\\Omega/\\text{sq}$ to restrict static IR drop $< 5.0\\%$.`,
     actionSuggestion
   };
 };

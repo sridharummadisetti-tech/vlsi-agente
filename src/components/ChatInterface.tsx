@@ -407,21 +407,21 @@ export function ChatInterface({
                 )}
               </h1>
 
-              <p className="mt-3 text-sm text-gray-400 max-w-lg">
-                Ask for any digital circuit, 74-series IC, Verilog RTL module, CMOS transistor topology, or physical PDN layout to begin.
+              <p className="mt-3 text-sm text-gray-400 max-w-xl">
+                Autonomous R&D engine for digital RTL synthesis, analytical device modeling, Logical Effort sizing, transistor topology, and physical backend flows.
               </p>
 
               {/* Quick Prompt Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-8 w-full max-w-4xl text-left">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-8 w-full max-w-5xl text-left">
                 {[
-                  { title: '7400 Quad NAND', desc: '4x independent 2-input NAND gates', tab: 'pin' },
-                  { title: '28T CMOS Full Adder', desc: 'Static mirror pull-up & pull-down network', tab: 'cmos' },
-                  { title: 'ASIC Floorplan DRC', desc: 'Macro halo keepouts & placement checks', tab: 'floorplan' },
-                  { title: 'PDN Power Mesh', desc: 'Static IR drop heatmap & TCL export', tab: 'powerplan' }
+                  { title: 'Tapered Inverter Buffer Chain', desc: 'Optimal sizing ratio driving 500fF load', prompt: 'Design an optimal sizing ratio for a tapered inverter buffer chain driving a 500fF load' },
+                  { title: '7400 Quad NAND Gate', desc: '4x independent 2-input NAND gates with DIP pinout', prompt: 'Design and synthesize 7400 Quad 2-Input NAND Gate module' },
+                  { title: '28T CMOS Full Adder', desc: 'Static mirror pull-up & pull-down transistor network', prompt: 'Design a 28-transistor static mirror CMOS Full Adder' },
+                  { title: 'PDN Power Mesh & IR Drop', desc: '2D static IR drop heatmap & OpenROAD TCL', prompt: 'Generate OpenROAD PDN script and simulate static IR drop grid' }
                 ].map((item, i) => (
                   <div
                     key={i}
-                    onClick={() => handleSend(`Design and analyze ${item.title}`)}
+                    onClick={() => handleSend(item.prompt)}
                     className="p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/10 hover:border-emerald-500/40 cursor-pointer transition-all group"
                   >
                     <div className="flex items-center justify-between text-emerald-400 font-semibold text-xs mb-1">
